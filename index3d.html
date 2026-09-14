@@ -23,6 +23,13 @@
   </header>
 
   <section class="controls">
+    <details class="acc">
+    <summary class="acc-head">
+      <span class="acc-chev" aria-hidden="true">▸</span>
+      <span>Settings</span>
+      <span class="acc-digest" id="accDigest"></span>
+    </summary>
+    <div class="acc-body">
     <label class="ctl">
       <span>Initial azimuth <em id="v-heading">0°</em></span>
       <input id="initialHeading" type="range" min="-180" max="180" step="1" value="0" />
@@ -55,6 +62,8 @@
       <input id="minRadiusRatio" type="range" min="0.5" max="4" step="0.1" value="1.5" />
       <p class="ctl-note" id="ratioNote"></p>
     </label>
+    </div>
+    </details>
 
     <div class="toggles">
       <label data-feature="duct"><input id="showDuct" type="checkbox" checked /> Duct</label>

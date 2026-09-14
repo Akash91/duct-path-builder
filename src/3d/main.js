@@ -64,6 +64,13 @@ function syncControls(state) {
     ? 'Jacket is not wider than the duct, so it is hidden inside it.'
     : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} of cover around the duct.`;
   $('jacketNote').classList.toggle('ctl-note--warn', swallowed);
+
+  // Keeps the collapsed accordion honest about what it is hiding.
+  $('accDigest').textContent = [
+    state.features.duct ? `duct ${state.ductWidth}` : null,
+    state.features.jacket ? `jacket ${state.jacketWidth}` : null,
+    `±${state.toleranceDeg}°`,
+  ].filter(Boolean).join(' · ');
 }
 
 function render() {

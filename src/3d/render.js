@@ -100,27 +100,37 @@ function curveForRun(run) {
 }
 
 /** Flat end caps, matching the 2D butt-cap rule (R-35). */
-function addCaps(group, curve, radius, material) {
+function addCaps(group, curve, radius, material, order) {
   for (const t of [0, 1]) {
     const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 28), material);
     const at = curve.getPointAt(t);
     disc.position.copy(at);
     disc.lookAt(at.clone().add(curve.getTangentAt(t)));
+    disc.renderOrder = order;
     group.add(disc);
   }
 }
 
-function addBand(group, runs, diameter, color, opacity) {
+/**
+ * `order` layers the bands the way the 2D view stacks its SVG layers: jacket first, duct over it.
+ * The bands are coaxial, so their bounding spheres share a centre and the renderer's own
+ * back-to-front sort cannot separate them; without depthWrite off, whichever draws first would
+ * depth-reject the other outright rather than blending with it.
+ */
+function addBand(group, runs, diameter, color, opacity, order) {
   const material = new THREE.MeshStandardMaterial({
     color, transparent: true, opacity, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide,
+    depthWrite: false,
   });
 
   for (const run of runs) {
     const curve = curveForRun(run);
     if (!curve) continue;
     const segments = Math.max(24, run.length * 26);
-    group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, segments, diameter / 2, 24, false), material));
-    addCaps(group, curve, diameter / 2, material);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, segments, diameter / 2, 24, false), material);
+    tube.renderOrder = order;
+    group.add(tube);
+    addCaps(group, curve, diameter / 2, material, order);
   }
 }
 
@@ -208,8 +218,8 @@ export function renderScene(ctx, state, solution, anchorIndex) {
   for (const g of Object.values(groups)) clearGroup(g);
 
   const runs = validRuns(solution);
-  if (state.features.jacket && state.showJacket) addBand(groups.jacket, runs, state.jacketWidth, COLOR.jacket, 0.18);
-  if (state.features.duct && state.showDuct) addBand(groups.duct, runs, state.ductWidth, COLOR.duct, 0.34);
+  if (state.features.jacket && state.showJacket) addBand(groups.jacket, runs, state.jacketWidth, COLOR.jacket, 0.18, 1);
+  if (state.features.duct && state.showDuct) addBand(groups.duct, runs, state.ductWidth, COLOR.duct, 0.34, 2);
 
   addCenterline(groups.path, solution);
   addGuides(groups.guides, state, solution, anchorIndex);
