@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Arc Path Builder — 3D</title>
+<link rel="stylesheet" href="styles.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body class="is-3d">
+
+<aside class="panel">
+  <header class="panel-head">
+    <h1>Arc Path Builder — 3D</h1>
+      <p class="hint">Each permitted sweep is a <strong>cone</strong> around the incoming tangent, so a turn may go any way round it — the 2D rays are this cone cut by a plane.</p>
+  </header>
+
+  <section class="controls">
+    <label class="ctl">
+      <span>Initial azimuth <em id="v-heading">0°</em></span>
+      <input id="initialHeading" type="range" min="-180" max="180" step="1" value="0" />
+    </label>
+
+    <label class="ctl">
+      <span>Initial elevation <em id="v-elevation">0°</em></span>
+      <input id="initialElevation" type="range" min="-89" max="89" step="1" value="0" />
+    </label>
+
+    <label class="ctl">
+      <span>Angular tolerance <em id="v-tol">2°</em></span>
+      <input id="tolerance" type="range" min="0" max="15" step="0.5" value="2" />
+      <p class="ctl-note">How far a point may sit off an exact cone and still be accepted. At 0° only perfect placements count. Nothing moves — the slack is absorbed as a small kink at the joint.</p>
+    </label>
+
+    <label class="ctl" data-feature="duct">
+      <span>Duct diameter <em id="v-duct">18</em></span>
+      <input id="ductWidth" type="range" min="2" max="120" step="1" value="18" />
+    </label>
+
+    <label class="ctl" data-feature="jacket">
+      <span>Jacket diameter <em id="v-jacket">40</em></span>
+      <input id="jacketWidth" type="range" min="2" max="200" step="1" value="40" />
+      <p class="ctl-note" id="jacketNote"></p>
+    </label>
+
+    <label class="ctl" data-feature="minBendRadius">
+      <span>Min bend radius <em id="v-ratio">1.5 × D</em></span>
+      <input id="minRadiusRatio" type="range" min="0.5" max="4" step="0.1" value="1.5" />
+      <p class="ctl-note" id="ratioNote"></p>
+    </label>
+
+    <div class="toggles">
+      <label data-feature="duct"><input id="showDuct" type="checkbox" checked /> Duct</label>
+      <label data-feature="jacket"><input id="showJacket" type="checkbox" checked /> Jacket</label>
+      <label data-feature="guideRays"><input id="showGuides" type="checkbox" checked /> Cones</label>
+      <label data-feature="snapping"><input id="snapEnabled" type="checkbox" checked /> Snap</label>
+    </div>
+  </section>
+
+  <p id="notice" class="notice" hidden></p>
+  <p id="summary" class="summary"></p>
+
+  <section class="table-wrap">
+    <table class="pts">
+      <thead>
+        <tr><th>#</th><th>x</th><th>y</th><th>z</th><th>Arc in</th><th></th></tr>
+      </thead>
+      <tbody id="ptBody"></tbody>
+    </table>
+  </section>
+
+  <footer class="panel-foot">
+    <button id="btnAdd" class="btn">Add point</button>
+    <button id="btnFit" class="btn">Fit</button>
+    <button id="btnClear" class="btn">Clear</button>
+    <button id="btnExport" class="btn" data-feature="importExport">Export</button>
+    <button id="btnImport" class="btn" data-feature="importExport">Import</button>
+    <button id="btnCross" class="btn btn--wide" data-feature="crossLink">← Open this path in 2D</button>
+    <input id="fileInput" type="file" accept="application/json,.json" hidden />
+  </footer>
+</aside>
+
+<main class="stage">
+  <div id="viewport" class="viewport"></div>
+  <p class="stage-hint">Drag to orbit · scroll to zoom · right-drag to pan · edit coordinates in the table</p>
+</main>
+
+<script type="module" src="src/3d/main.js"></script>
+</body>
+</html>

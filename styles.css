@@ -1,0 +1,255 @@
+:root {
+  --bg: #0d1117;
+  --panel: #141a22;
+  --line: #232c38;
+  --text: #dfe6ef;
+  --muted: #8a97a8;
+  --ok: #4ea8ff;
+  --err: #ff5f56;
+  --warn: #d9a441;
+  --duct: rgba(78, 168, 255, 0.16);
+  --jacket: rgba(139, 160, 189, 0.14);
+  --guide: #3a4a5e;
+}
+
+* { box-sizing: border-box; }
+
+/* Feature-flagged elements set [hidden]; beat the display rules below. */
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  /* Without a bounded row, a WebGL canvas sizes the stage that sizes the canvas. */
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+/* ---------- panel ---------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+
+.panel-head { padding: 16px 16px 10px; }
+.panel-head h1 { margin: 0 0 6px; font-size: 15px; letter-spacing: .2px; }
+.hint { margin: 0; color: var(--muted); font-size: 11.5px; }
+.hint a { color: var(--ok); }
+.hint strong { color: var(--text); font-weight: 600; }
+
+.controls {
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.ctl { display: block; margin-bottom: 12px; }
+.ctl > span {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.ctl em { color: var(--text); font-style: normal; font-variant-numeric: tabular-nums; }
+.ctl input[type="range"] { width: 100%; accent-color: var(--ok); }
+.ctl-note { margin: 4px 0 0; color: #6b7889; font-size: 10.5px; line-height: 1.4; }
+.ctl-note--warn { color: #d9a441; }
+
+.toggles { display: flex; gap: 14px; color: var(--muted); font-size: 11.5px; }
+.toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.toggles input { accent-color: var(--ok); }
+
+.summary {
+  margin: 0;
+  padding: 10px 16px;
+  color: var(--muted);
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--line);
+}
+.summary--bad { color: var(--err); }
+.summary--warn { color: var(--warn); }
+
+.notice {
+  margin: 0;
+  padding: 9px 16px;
+  background: rgba(217, 164, 65, .1);
+  border-bottom: 1px solid var(--line);
+  border-left: 2px solid var(--warn);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.btn--wide { flex: 1 0 100%; }
+
+body.is-disabled { display: block; overflow: auto; }
+
+.disabled-card {
+  max-width: 420px;
+  margin: 18vh auto;
+  padding: 22px 24px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-align: center;
+}
+.disabled-card h1 { margin: 0 0 10px; font-size: 15px; }
+.disabled-card p { margin: 8px 0; color: var(--muted); font-size: 12px; }
+.disabled-card code { color: var(--text); background: #0f151d; padding: 1px 5px; border-radius: 4px; }
+.disabled-card a { color: var(--ok); }
+
+/* ---------- table ---------- */
+
+.table-wrap { flex: 1; min-height: 0; overflow: auto; }
+
+.pts { width: 100%; border-collapse: collapse; }
+.pts th {
+  position: sticky;
+  top: 0;
+  padding: 7px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.pts td { padding: 3px 8px; border-bottom: 1px solid #1b222c; }
+.pts .idx { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pts .empty { padding: 20px 8px; color: var(--muted); text-align: center; }
+.row--selected { background: #1b2531; }
+
+.num {
+  width: 62px;
+  padding: 3px 5px;
+  background: #0f151d;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.num:focus { outline: 1px solid var(--ok); border-color: var(--ok); }
+.num--sm { width: 52px; }
+
+/* Three.js owns this element's contents; it just needs to fill the stage. */
+.viewport { position: relative; flex: 1; min-width: 0; min-height: 0; }
+/* Absolute so the canvas can never feed its own size back into the layout. */
+.viewport canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.status { white-space: nowrap; }
+.tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 20px;
+  font-size: 10.5px;
+}
+.tag--ok { background: rgba(78,168,255,.16); color: var(--ok); }
+.tag--err { background: rgba(255,95,86,.16); color: var(--err); }
+.tag--warn { background: rgba(217,164,65,.16); color: var(--warn); }
+.tag--start { background: #202a36; color: var(--muted); }
+
+.actions { white-space: nowrap; text-align: right; }
+
+.mini {
+  padding: 2px 6px;
+  margin-left: 3px;
+  background: #1c2431;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.mini:hover { color: var(--text); border-color: #3a4756; }
+.mini--danger:hover { color: var(--err); border-color: var(--err); }
+
+.panel-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.btn {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  background: #1c2431;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--ok); }
+
+/* ---------- stage ---------- */
+
+.stage { position: relative; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+#canvas { width: 100%; height: 100%; cursor: grab; touch-action: none; }
+#canvas.panning { cursor: grabbing; }
+
+.stage-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 10px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+/* ---------- svg layers ---------- */
+
+.duct {
+  fill: none;
+  stroke: var(--duct);
+  /* Flat ends, like a cut cylinder. Joints are smooth because each run is a single path. */
+  stroke-linecap: butt;
+  stroke-linejoin: round;
+}
+
+.jacket {
+  fill: none;
+  stroke: var(--jacket);
+  stroke-linecap: butt;
+  stroke-linejoin: round;
+}
+
+.seg { fill: none; stroke-width: 2.5; }
+.seg--ok { stroke: var(--ok); }
+.seg--error { stroke: var(--err); stroke-dasharray: 7 6; stroke-width: 2; }
+.seg--tight { stroke: var(--warn); }
+
+.guide { stroke: var(--guide); stroke-width: 1; stroke-dasharray: 3 5; }
+/* The stretch too close to bend a band of the current width. */
+.guide--blocked { stroke: rgba(217,164,65,.5); stroke-dasharray: 2 4; }
+.guide-tangent { stroke: #5d708a; stroke-width: 1.5; }
+.guide-label { fill: var(--guide); font-size: 10px; text-anchor: middle; }
+
+.err-marker circle { fill: var(--err); }
+.err-marker text { fill: #fff; font-size: 14px; font-weight: 700; text-anchor: middle; }
+
+.tight-marker circle { fill: var(--warn); }
+.tight-marker text { fill: #1a1205; font-size: 13px; font-weight: 700; text-anchor: middle; }
+
+.pt-hit { fill: transparent; cursor: grab; }
+.pt-dot { fill: var(--bg); stroke: var(--ok); stroke-width: 2.5; pointer-events: none; }
+.pt--selected .pt-dot { fill: var(--ok); }
+.pt-label { fill: var(--muted); font-size: 11px; pointer-events: none; }
+.dragging .pt-hit { cursor: grabbing; }

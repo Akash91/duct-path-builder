@@ -1,0 +1,24 @@
+{
+  "sweeps": [0, 30, 45, 60, 90],
+
+  "features": {
+    "duct": true,
+    "jacket": true,
+    "minBendRadius": true,
+    "guideRays": true,
+    "snapping": true,
+    "importExport": true,
+    "crossLink": true,
+    "threeD": false,
+    "autosave": true
+  },
+
+  "defaults": {
+    "initialHeading": 0,
+    "initialElevation": 0,
+    "toleranceDeg": 2,
+    "ductWidth": 18,
+    "jacketWidth": 40,
+    "minRadiusRatio": 1.5
+  }
+}
