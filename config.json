@@ -9,7 +9,7 @@
     "snapping": true,
     "importExport": true,
     "crossLink": true,
-    "threeD": false,
+    "threeD": true,
     "autosave": true
   },
 

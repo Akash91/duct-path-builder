@@ -1,8 +1,8 @@
 # Arc Path Builder
 
 Two builders, **2D** ([index.html](index.html)) and **3D** ([index3d.html](index3d.html)), sharing
-one geometry core. The 3D view is **off by default** — set `features.threeD` to `true` in
-[config.json](config.json) to enable it.
+one geometry core. The 3D view is enabled via `features.threeD` in [config.json](config.json); set
+it to `false` to drop back to 2D only.
 
 Enter an ordered list of points; the app connects each consecutive pair with a **single circular
 arc** whose swept angle is exactly **0°, 30°, 45°, 60° or 90°** (configurable), with each arc
@@ -20,9 +20,8 @@ cd curve-path-builder
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000> for 2D, or <http://localhost:8000/index3d.html> for 3D once
-`features.threeD` is enabled. No build step and no install; Three.js loads from a CDN via an
-import map.
+Then open <http://localhost:8000> for 2D, or <http://localhost:8000/index3d.html> for 3D. No build
+step and no install; Three.js loads from a CDN via an import map.
 
 ## Test
 
@@ -71,7 +70,7 @@ rebuild.
   "sweeps": [0, 30, 45, 60, 90],
   "features": { "duct": true, "jacket": true, "minBendRadius": true,
                 "guideRays": true, "snapping": true, "importExport": true,
-                "crossLink": true, "threeD": false, "autosave": true },
+                "crossLink": true, "threeD": true, "autosave": true },
   "defaults": { "initialHeading": 0, "toleranceDeg": 2,
                 "ductWidth": 18, "jacketWidth": 40, "minRadiusRatio": 1.5 }
 }
