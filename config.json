@@ -10,6 +10,8 @@
     "importExport": true,
     "crossLink": true,
     "threeD": true,
+    "flanges": true,
+    "drainSlope": true,
     "autosave": true
   },
 
@@ -17,8 +19,12 @@
     "initialHeading": 0,
     "initialElevation": 0,
     "toleranceDeg": 2,
-    "ductWidth": 18,
-    "jacketWidth": 40,
-    "minRadiusRatio": 1.5
+    "ductWidth": 180,
+    "jacketWidth": 400,
+    "minRadiusRatio": 1.5,
+    "maxPieceLengthMm": 1050,
+    "flangeBendOffsetMm": 60,
+    "slopeDeg": 3,
+    "slopeToleranceDeg": 1
   }
 }

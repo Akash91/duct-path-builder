@@ -4,6 +4,7 @@
 import { DEG, normalizeDeg, angleDelta, sweepCandidates, nearestSweep } from '../core/angles.js';
 import { EPS, radiusFor, minChordFor, isTooTight } from '../core/arcMath.js';
 import { walkPath } from '../core/solve.js';
+import { compactBendParams, fabricationSpans } from '../core/flange.js';
 
 export { DEG, minChordFor };
 
@@ -120,4 +121,80 @@ export function snapToLegal(p0, p1, tauDeg, minRadius = 0) {
 export function solvePath(points, initialHeadingDeg, toleranceDeg, minRadius = 0) {
   return walkPath(points, initialHeadingDeg, (a, b, tau) =>
     classifySegment(a, b, tau, toleranceDeg, minRadius));
+}
+
+/** Pose at `dist` along a solved segment, for flange stations (R-143). */
+export function poseAlong(seg, dist) {
+  const { from, to, arc } = seg;
+  if (!arc || arc.straight || !Number.isFinite(arc.radius)) {
+    const L = Math.hypot(to.x - from.x, to.y - from.y) || 1;
+    const t = Math.min(1, Math.max(0, dist / L));
+    return {
+      x: from.x + (to.x - from.x) * t,
+      y: from.y + (to.y - from.y) * t,
+      tangentDeg: arc?.tStart ?? Math.atan2(to.y - from.y, to.x - from.x) / DEG,
+    };
+  }
+  const ang = dist / arc.radius;
+  const start = Math.atan2(from.y - arc.center.y, from.x - arc.center.x);
+  const a = start + arc.dir * ang;
+  return {
+    x: arc.center.x + arc.radius * Math.cos(a),
+    y: arc.center.y + arc.radius * Math.sin(a),
+    tangentDeg: normalizeDeg(arc.tStart + arc.dir * (ang / DEG)),
+  };
+}
+
+/**
+ * Shop centerline for a solved run: a bend becomes lead straight + compact elbow + trail
+ * so leftover length stays on straights (R-149).
+ * Lengths match `fabricationSpans`, so flange stations map onto this path.
+ */
+export function expandRun(run, options) {
+  if (!options || !run?.length) return run ?? [];
+  const { offsetMm, maxPieceMm, minRadius = 0 } = options;
+  const out = [];
+  for (const seg of run) {
+    const spans = fabricationSpans(seg, offsetMm, maxPieceMm, minRadius);
+    const params = compactBendParams(seg, offsetMm, maxPieceMm, minRadius);
+    const t0 = (seg.arc?.tStart ?? 0) * DEG;
+    const t1 = (seg.arc?.tEnd ?? 0) * DEG;
+    const S = {
+      x: seg.from.x + params.lead * Math.cos(t0),
+      y: seg.from.y + params.lead * Math.sin(t0),
+    };
+    const E = {
+      x: seg.to.x - params.trail * Math.cos(t1),
+      y: seg.to.y - params.trail * Math.sin(t1),
+    };
+    for (const span of spans) {
+      if (span.role === 'full') {
+        out.push(seg);
+        continue;
+      }
+      if (span.role === 'lead') {
+        out.push({
+          ...seg,
+          from: seg.from,
+          to: S,
+          chord: span.length,
+          arc: { straight: true, theta: 0, tStart: seg.arc.tStart, tEnd: seg.arc.tStart, radius: Infinity },
+        });
+        continue;
+      }
+      if (span.role === 'trail') {
+        out.push({
+          ...seg,
+          from: E,
+          to: seg.to,
+          chord: span.length,
+          arc: { straight: true, theta: 0, tStart: seg.arc.tEnd, tEnd: seg.arc.tEnd, radius: Infinity },
+        });
+        continue;
+      }
+      const arc = arcFromChord(S, E, span.theta, seg.arc.dir);
+      out.push({ ...seg, from: S, to: E, chord: span.length, arc });
+    }
+  }
+  return out;
 }

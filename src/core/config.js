@@ -14,15 +14,21 @@ export const DEFAULT_CONFIG = {
     importExport: true,
     crossLink: true,
     threeD: false,
+    flanges: false,
+    drainSlope: false,
     autosave: true,
   },
   defaults: {
     initialHeading: 0,
     initialElevation: 0,
     toleranceDeg: 2,
-    ductWidth: 18,
-    jacketWidth: 40,
+    ductWidth: 180,
+    jacketWidth: 400,
     minRadiusRatio: 1.5,
+    maxPieceLengthMm: 1050,
+    flangeBendOffsetMm: 60,
+    slopeDeg: 3,
+    slopeToleranceDeg: 1,
   },
 };
 

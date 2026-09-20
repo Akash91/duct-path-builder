@@ -1,7 +1,12 @@
-import { DEG, legalBearings, minChordFor } from './geometry.js';
+import { DEG, legalBearings, minChordFor, poseAlong, expandRun } from './geometry.js';
 import { tangentAt, minRadiusFor, validRuns } from '../core/solve.js';
+import {
+  flangeOptionsFor, layoutPieces, fabricationDigest, flangeDrawDims, poseOnRun,
+  pickPieceAt2d, samplePieceLocs,
+} from '../core/flange.js';
+import { POINT_DOT_R, POINT_HIT_R, POINT_MARKER_R, ORIGIN } from '../core/view.js';
 
-const GUIDE_LENGTH = 900;
+const GUIDE_LENGTH = 4000;
 
 const n = (v) => Math.round(v * 1000) / 1000;
 
@@ -38,24 +43,41 @@ function renderBand(runs, cls, width) {
     .join('');
 }
 
-function renderCenterline(solution) {
-  return solution.segments
+function renderCenterline(solution, shopRuns, flangesOn) {
+  const errors = solution.segments
     .map((s) => {
-      if (s.ok) {
-        const cls = s.tooTight ? 'seg seg--tight' : 'seg seg--ok';
-        return `<path class="${cls}" data-seg="${s.index}" d="${arcPathD(s)}" />`;
-      }
-      if (s.reason === 'degenerate') return '';
+      if (s.ok || s.reason === 'degenerate') return '';
       return `<path class="seg seg--error" data-seg="${s.index}" d="${chordPathD(s)}" />`;
     })
     .join('');
+
+  if (!flangesOn) {
+    const ok = solution.segments
+      .map((s) => {
+        if (!s.ok) return '';
+        const cls = s.tooTight ? 'seg seg--tight' : 'seg seg--ok';
+        return `<path class="${cls}" data-seg="${s.index}" d="${arcPathD(s)}" />`;
+      })
+      .join('');
+    return ok + errors;
+  }
+
+  const shop = (shopRuns ?? [])
+    .map((run) => run
+      .map((s) => {
+        const cls = s.tooTight ? 'seg seg--tight' : 'seg seg--ok';
+        return `<path class="${cls}" data-seg="${s.index}" d="${arcPathD(s)}" />`;
+      })
+      .join(''))
+    .join('');
+  return shop + errors;
 }
 
 function marker(s, cls, glyph, title) {
   const mx = (s.from.x + s.to.x) / 2;
   const my = (s.from.y + s.to.y) / 2;
   return `<g class="${cls}" transform="translate(${n(mx)} ${n(my)})">
-    <circle r="11" />
+    <circle r="${POINT_MARKER_R}" />
     <text y="4">${glyph}</text>
     <title>${title}</title>
   </g>`;
@@ -103,7 +125,7 @@ function renderGuides(state, solution, anchorIndex) {
 
       const open = `<line class="guide" x1="${n(anchor.x + blocked * ux)}" y1="${n(anchor.y + blocked * uy)}" x2="${n(anchor.x + GUIDE_LENGTH * ux)}" y2="${n(anchor.y + GUIDE_LENGTH * uy)}" />`;
 
-      const ld = Math.max(74, blocked + 30);
+      const ld = Math.max(240, blocked + 90);
       const label = theta === 0 ? 'straight' : `${theta}°${dir > 0 ? '↻' : '↺'}`;
       const text = `<text class="guide-label" x="${n(anchor.x + ld * ux)}" y="${n(anchor.y + ld * uy)}">${label}</text>`;
 
@@ -111,8 +133,8 @@ function renderGuides(state, solution, anchorIndex) {
     })
     .join('');
 
-  const tx = anchor.x + 130 * Math.cos(tau * DEG);
-  const ty = anchor.y + 130 * Math.sin(tau * DEG);
+  const tx = anchor.x + 400 * Math.cos(tau * DEG);
+  const ty = anchor.y + 400 * Math.sin(tau * DEG);
   const tangent = `<line class="guide-tangent" x1="${n(anchor.x)}" y1="${n(anchor.y)}" x2="${n(tx)}" y2="${n(ty)}" />`;
 
   return tangent + rays;
@@ -123,21 +145,115 @@ function renderPoints(state) {
     .map((p, i) => {
       const cls = ['pt', p.id === state.selectedId ? 'pt--selected' : ''].join(' ').trim();
       return `<g class="${cls}" data-id="${p.id}">
-        <circle class="pt-hit" cx="${n(p.x)}" cy="${n(p.y)}" r="14" />
-        <circle class="pt-dot" cx="${n(p.x)}" cy="${n(p.y)}" r="6" />
-        <text class="pt-label" x="${n(p.x) + 12}" y="${n(p.y) - 10}">${i + 1}</text>
+        <circle class="pt-hit" cx="${n(p.x)}" cy="${n(p.y)}" r="${POINT_HIT_R}" />
+        <circle class="pt-dot" cx="${n(p.x)}" cy="${n(p.y)}" r="${POINT_DOT_R}" />
+        <text class="pt-label" x="${n(p.x) + 10}" y="${n(p.y) - 8}">${i + 1}</text>
       </g>`;
     })
     .join('');
 }
 
+function flangeMark(pose, dims, kind, err) {
+  const a = pose.tangentDeg * DEG;
+  const ux = Math.cos(a);
+  const uy = Math.sin(a);
+  const px = -uy;
+  const py = ux;
+  const { x, y } = pose;
+  const R = dims.plateR;
+  const c = dims.collarL / 2;
+  const ir = dims.innerR;
+  const cls = err ? 'flange flange--err' : 'flange';
+  const plate = `M ${n(x - px * R)} ${n(y - py * R)} L ${n(x + px * R)} ${n(y + py * R)}`;
+  const collar = [
+    `M ${n(x - ux * c - px * ir)} ${n(y - uy * c - py * ir)} L ${n(x + ux * c - px * ir)} ${n(y + uy * c - py * ir)}`,
+    `M ${n(x - ux * c + px * ir)} ${n(y - uy * c + py * ir)} L ${n(x + ux * c + px * ir)} ${n(y + uy * c + py * ir)}`,
+  ].join(' ');
+  return `<g class="${cls}">
+    <title>${kind} flange</title>
+    <path class="flange-plate" d="${plate}" />
+    <path class="flange-collar" d="${collar}" />
+  </g>`;
+}
+
+function renderFlanges(state, solution, spatial) {
+  const options = flangeOptionsFor(state);
+  if (!options) return '';
+  const laid = layoutPieces(solution, options);
+  const dims = flangeDrawDims(state);
+  const badStations = new Set(
+    laid.errors.flatMap((e) => [e.piece.s0, e.piece.s1].map((s) => s.toFixed(3))),
+  );
+  return laid.flanges
+    .map((f) => {
+      const pose = poseOnRun(spatial(f.run), f.s, poseAlong);
+      if (!pose) return '';
+      const err = badStations.has(f.s.toFixed(3));
+      return flangeMark(pose, dims, f.kind, err);
+    })
+    .join('');
+}
+
+function renderOrigin() {
+  const s = 36;
+  return `<g class="origin" pointer-events="none">
+    <line x1="${ORIGIN.x - s}" y1="${ORIGIN.y}" x2="${ORIGIN.x + s}" y2="${ORIGIN.y}" />
+    <line x1="${ORIGIN.x}" y1="${ORIGIN.y - s}" x2="${ORIGIN.x}" y2="${ORIGIN.y + s}" />
+    <circle cx="${ORIGIN.x}" cy="${ORIGIN.y}" r="3" />
+    <text x="${ORIGIN.x + 8}" y="${ORIGIN.y - 8}">0,0</text>
+  </g>`;
+}
+
+function spatialFor(state) {
+  const options = flangeOptionsFor(state);
+  const cache = new Map();
+  return (run) => {
+    if (!options || !run) return run;
+    if (!cache.has(run)) cache.set(run, expandRun(run, options));
+    return cache.get(run);
+  };
+}
+
+export function hoverPieces(state, solution) {
+  const options = flangeOptionsFor(state);
+  const laid = layoutPieces(solution, options);
+  const spatial = spatialFor(state);
+  return laid.pieces.map((p) => ({ ...p, run: spatial(p.run) }));
+}
+
+export function hitPiece(state, solution, point) {
+  const threshold = Math.max(state.ductWidth, state.jacketWidth) / 2 + 24;
+  return pickPieceAt2d(hoverPieces(state, solution), point, poseAlong, threshold);
+}
+
+export function highlightHoveredPiece(layer, piece) {
+  if (!layer) return;
+  if (!piece) {
+    layer.innerHTML = '';
+    return;
+  }
+  const cmds = [];
+  for (const loc of samplePieceLocs(piece, 16)) {
+    if (!loc?.seg) continue;
+    const pose = poseAlong(loc.seg, loc.local);
+    if (!pose) continue;
+    cmds.push(`${cmds.length ? 'L' : 'M'} ${n(pose.x)} ${n(pose.y)}`);
+  }
+  layer.innerHTML = cmds.length ? `<path class="piece-hit" d="${cmds.join(' ')}" />` : '';
+}
+
 export function renderCanvas(layers, state, solution, anchorIndex) {
-  const runs = validRuns(solution);
+  const options = flangeOptionsFor(state);
+  const solverRuns = validRuns(solution);
+  const spatial = spatialFor(state);
+  const runs = options ? solverRuns.map((run) => spatial(run)) : solverRuns;
 
   layers.jacket.innerHTML = state.features.jacket && state.showJacket ? renderBand(runs, 'jacket', state.jacketWidth) : '';
   layers.duct.innerHTML = state.features.duct && state.showDuct ? renderBand(runs, 'duct', state.ductWidth) : '';
-  layers.path.innerHTML = renderCenterline(solution);
-  layers.guides.innerHTML = renderGuides(state, solution, anchorIndex);
+  layers.path.innerHTML = renderCenterline(solution, runs, Boolean(options));
+  if (layers.flanges) layers.flanges.innerHTML = renderFlanges(state, solution, spatial);
+  if (layers.hover) layers.hover.innerHTML = '';
+  layers.guides.innerHTML = renderOrigin() + renderGuides(state, solution, anchorIndex);
   layers.markers.innerHTML = renderMarkers(solution);
   layers.points.innerHTML = renderPoints(state);
 }
@@ -190,6 +306,8 @@ export function renderSummary(el, solution, state) {
   const total = solution.segments.length;
   const bad = solution.errorCount;
   const tight = solution.tightCount;
+  const laid = layoutPieces(solution, flangeOptionsFor(state));
+  const digest = fabricationDigest(laid);
 
   if (total === 0) {
     el.textContent = 'Add at least two points to form a segment.';
@@ -197,10 +315,11 @@ export function renderSummary(el, solution, state) {
     const parts = [`${total - bad}/${total} segments valid`];
     if (tight > 0) parts.push(`${tight} too tight to bend`);
     parts.push(`exit tangent ${solution.tangentOut.toFixed(1)}°`);
-    if (state.features.minBendRadius) parts.push(`min radius ${minRadiusFor(state).toFixed(0)}`);
+    if (state.features.minBendRadius) parts.push(`min radius ${minRadiusFor(state).toFixed(0)} mm`);
+    if (digest) parts.push(digest);
     el.textContent = parts.join(' · ');
   }
 
   el.classList.toggle('summary--bad', bad > 0);
-  el.classList.toggle('summary--warn', bad === 0 && tight > 0);
+  el.classList.toggle('summary--warn', bad === 0 && (tight > 0 || laid.errors.length > 0));
 }

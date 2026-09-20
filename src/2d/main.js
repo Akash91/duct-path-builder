@@ -1,12 +1,16 @@
 import { DEG, legalBearings, snapToLegal, solvePath } from './geometry.js';
 import { setSweeps } from '../core/angles.js';
 import { tangentAt, minRadiusFor } from '../core/solve.js';
-import { renderCanvas, renderTable, renderSummary } from './render.js';
+import { defaultAddReach, layoutPieces, flangeOptionsFor, describePiece, placePieceTip } from '../core/flange.js';
+import { renderPiecePanel, bindPiecePanel } from '../core/piecePanel.js';
+import { centerViewOnPoint } from '../core/view.js';
+import { renderCanvas, renderTable, renderSummary, hitPiece, highlightHoveredPiece } from './render.js';
 import { loadConfig, applyFeatureFlags } from '../core/config.js';
 import { sendPath, takePath } from '../core/handoff.js';
 import {
   getState, subscribe, update, restore, configure,
   addPoint, movePoint, removePoint, reorderPoint, clearPoints,
+  selectPiece, setPieceOverride, splitPiece,
   toJSON, fromJSON,
 } from '../core/store.js';
 
@@ -18,11 +22,17 @@ const layers = {
   jacket: $('layer-jacket'),
   duct: $('layer-duct'),
   path: $('layer-path'),
+  flanges: $('layer-flanges'),
+  hover: $('layer-hover'),
   markers: $('layer-markers'),
   points: $('layer-points'),
 };
+const pieceTip = $('pieceTip');
 const ptBody = $('ptBody');
 const summaryEl = $('summary');
+const pieceSelect = $('pieceSelect');
+const pieceDetail = $('pieceDetail');
+const pieceDigest = $('pieceDigest');
 
 let solution = { segments: [], tangentOut: 0, errorCount: 0 };
 let drag = null;
@@ -52,35 +62,44 @@ function syncControls(state) {
   $('ductWidth').value = state.ductWidth;
   $('jacketWidth').value = state.jacketWidth;
   $('minRadiusRatio').value = state.minRadiusRatio;
+  if ($('maxPieceLengthMm')) $('maxPieceLengthMm').value = state.maxPieceLengthMm;
+  if ($('flangeBendOffsetMm')) $('flangeBendOffsetMm').value = state.flangeBendOffsetMm;
   $('showDuct').checked = state.showDuct;
   $('showJacket').checked = state.showJacket;
   $('showGuides').checked = state.showGuides;
   $('snapEnabled').checked = state.snapEnabled;
   $('v-heading').textContent = `${state.initialHeading}°`;
   $('v-tol').textContent = `±${state.toleranceDeg}°`;
-  $('v-duct').textContent = String(state.ductWidth);
-  $('v-jacket').textContent = String(state.jacketWidth);
+  $('v-duct').textContent = `${state.ductWidth} mm`;
+  $('v-jacket').textContent = `${state.jacketWidth} mm`;
   $('v-ratio').textContent = `${state.minRadiusRatio.toFixed(1)} × D`;
+  if ($('v-piece')) $('v-piece').textContent = `${state.maxPieceLengthMm} mm`;
+  if ($('v-flange')) $('v-flange').textContent = `${state.flangeBendOffsetMm} mm`;
 
   const minR = minRadiusFor(state);
   $('ratioNote').textContent = state.minRadiusRatio < 1
-    ? `Minimum centerline radius ${minR.toFixed(0)}. Below 0.5 × D the inner edge folds back on itself.`
-    : `Minimum centerline radius ${minR.toFixed(0)}, measured against the widest band.`;
+    ? `Minimum centerline radius ${minR.toFixed(0)} mm. Below 0.5 × D the inner edge folds back on itself.`
+    : `Minimum centerline radius ${minR.toFixed(0)} mm, measured against the widest band.`;
   $('ratioNote').classList.toggle('ctl-note--warn', state.minRadiusRatio < 1);
 
   // The jacket is drawn under the duct, so a smaller diameter silently vanishes (R-39).
   const swallowed = state.jacketWidth <= state.ductWidth;
   $('jacketNote').textContent = swallowed
     ? 'Jacket is not wider than the duct, so it is hidden behind it.'
-    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} of cover around the duct.`;
+    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(0)} mm of cover around the duct.`;
   $('jacketNote').classList.toggle('ctl-note--warn', swallowed);
 
   // Keeps the collapsed accordion honest about what it is hiding.
   $('accDigest').textContent = [
-    state.features.duct ? `duct ${state.ductWidth}` : null,
-    state.features.jacket ? `jacket ${state.jacketWidth}` : null,
+    state.features.duct ? `duct ${state.ductWidth} mm` : null,
+    state.features.jacket ? `jacket ${state.jacketWidth} mm` : null,
+    state.features.flanges ? `piece ${state.maxPieceLengthMm} mm` : null,
     `±${state.toleranceDeg}°`,
   ].filter(Boolean).join(' · ');
+}
+
+function currentPieces(state) {
+  return layoutPieces(solution, flangeOptionsFor(state)).pieces;
 }
 
 function render() {
@@ -89,14 +108,15 @@ function render() {
   renderCanvas(layers, state, solution, anchorIndex(state));
   renderTable(ptBody, state, solution);
   renderSummary(summaryEl, solution, state);
+  renderPiecePanel(pieceSelect, pieceDetail, pieceDigest, state, currentPieces(state));
   syncControls(state);
 }
 
 // ---------------------------------------------------------------- viewport
 
 const BASE = { w: 1200, h: 800 };
-const MIN_W = 150;
-const MAX_W = 24000;
+const MIN_W = 400;
+const MAX_W = 80000;
 
 // Viewport is session state, not document state: panning must not touch the store or re-render.
 let view = { x: 0, y: 0, ...BASE };
@@ -145,6 +165,7 @@ applyView();
 // ---------------------------------------------------------------- canvas input
 
 svg.addEventListener('pointerdown', (e) => {
+  hidePieceTip();
   const state = getState();
   const hit = e.target.closest('.pt');
 
@@ -162,16 +183,33 @@ svg.addEventListener('pointerdown', (e) => {
   svg.classList.add('panning');
 });
 
+function hidePieceTip() {
+  highlightHoveredPiece(layers.hover, null);
+  placePieceTip(pieceTip, null);
+}
+
 svg.addEventListener('pointermove', (e) => {
   if (pan) {
     const k = svgPerPixel(pan.view);
     view.x = pan.view.x - (e.clientX - pan.clientX) * k;
     view.y = pan.view.y - (e.clientY - pan.clientY) * k;
     applyView();
+    hidePieceTip();
     return;
   }
 
-  if (!drag) return;
+  if (!drag) {
+    const state = getState();
+    if (!state.features.flanges || e.target.closest('.pt')) {
+      hidePieceTip();
+      return;
+    }
+    const piece = hitPiece(state, solution, toSvgCoords(e));
+    highlightHoveredPiece(layers.hover, piece);
+    placePieceTip(pieceTip, piece ? describePiece(piece, state) : null, e.clientX, e.clientY);
+    return;
+  }
+
   drag.moved = true;
 
   const state = getState();
@@ -219,8 +257,9 @@ function endDrag(e) {
 
 svg.addEventListener('pointerup', endDrag);
 svg.addEventListener('pointercancel', endDrag);
+svg.addEventListener('pointerleave', hidePieceTip);
 
-const round = (v) => Math.round(v * 10) / 10;
+const round = (v) => Math.round(v);
 
 // ---------------------------------------------------------------- table input
 
@@ -247,7 +286,13 @@ ptBody.addEventListener('click', (e) => {
     return;
   }
   const row = e.target.closest('tr[data-id]');
-  if (row) update({ selectedId: row.dataset.id });
+  if (!row || e.target.closest('input.num')) return;
+  if (row.dataset.id !== getState().selectedId) update({ selectedId: row.dataset.id });
+  const p = getState().points.find((q) => q.id === row.dataset.id);
+  if (p) {
+    view = centerViewOnPoint(view, p);
+    applyView();
+  }
 });
 
 /** R-22: slide the point onto the nearest legal ray, out to the minimum bend distance if needed. */
@@ -272,16 +317,20 @@ $('tolerance').addEventListener('input', (e) => update({ toleranceDeg: Number(e.
 $('ductWidth').addEventListener('input', (e) => update({ ductWidth: Number(e.target.value) }));
 $('jacketWidth').addEventListener('input', (e) => update({ jacketWidth: Number(e.target.value) }));
 $('minRadiusRatio').addEventListener('input', (e) => update({ minRadiusRatio: Number(e.target.value) }));
+$('maxPieceLengthMm')?.addEventListener('input', (e) => update({ maxPieceLengthMm: Number(e.target.value) }));
+$('flangeBendOffsetMm')?.addEventListener('input', (e) => update({ flangeBendOffsetMm: Number(e.target.value) }));
 $('showDuct').addEventListener('change', (e) => update({ showDuct: e.target.checked }));
 $('showJacket').addEventListener('change', (e) => update({ showJacket: e.target.checked }));
 $('showGuides').addEventListener('change', (e) => update({ showGuides: e.target.checked }));
 $('snapEnabled').addEventListener('change', (e) => update({ snapEnabled: e.target.checked }));
 
+bindPiecePanel(pieceSelect, pieceDetail, { selectPiece, setPieceOverride, splitPiece });
+
 /** Places the new point on a legal ray so it starts out valid. */
 $('btnAdd').addEventListener('click', () => {
   const state = getState();
   if (state.points.length === 0) {
-    addPoint(200, 400);
+    addPoint(0, 0);
     return fitView();
   }
 
@@ -289,7 +338,8 @@ $('btnAdd').addEventListener('click', () => {
   const tau = tangentAt(solution, state.points.length - 1, state.initialHeading);
   // Extend straight ahead (the 0 sweep), so a plain "add" never introduces a turn.
   const { bearing } = legalBearings(tau).find((c) => c.theta === 0);
-  const added = { x: round(last.x + 220 * Math.cos(bearing * DEG)), y: round(last.y + 220 * Math.sin(bearing * DEG)) };
+  const reach = defaultAddReach(state, 2200);
+  const added = { x: round(last.x + reach * Math.cos(bearing * DEG)), y: round(last.y + reach * Math.sin(bearing * DEG)) };
 
   addPoint(added.x, added.y);
   if (!inView(added)) fitView();

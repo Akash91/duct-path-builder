@@ -135,32 +135,58 @@ point must lie on the ray *and* at least `d_min(θ)` along it. Sharper sweeps ha
 
 ---
 
-### 3.5 In 3D the rays become cones
+### 3.5 In 3D the rays become cones — but a pipe turns in one plane
 
 Everything in §3.1–§3.4 is dimension-free. Only §3.2 changes shape.
 
 In 2D the incoming tangent is a scalar bearing and a turn is left or right, so the permitted
-half-angles give a finite set of **rays**. In 3D the tangent is a unit vector and the arc may bend
-in *any plane containing it*, so each half-angle sweeps out a **cone**:
+half-angles give a finite set of **rays**. In 3D the tangent is a unit vector and each half-angle
+sweeps out a **cone**:
 
 ```
 angle( t , normalise(Pi+1 - Pi) )  =  θ/2
 ```
 
-The 2D rays are exactly these cones cut by the working plane — four non-zero sweeps × two sides,
-plus the straight ray, gives the nine 2D bearings. Tests assert this correspondence directly.
+A physical elbow, though, is a **planar** fitting. It can yaw in **plan** (change Y, hold the
+vertical plane) **or** pitch in **elevation** (change Z, hold heading) — not both in one piece.
+Table points **may** differ in Y and Z at once. A single shop piece still cannot, so a Y+Z table
+span is **auto-routed** into planar shop legs: leftover straights plus a 90° plan elbow and a
+90° elevation elbow (same idea as compacting a long curve into straights and a sharp turn).
+Those waypoints are derived; they are not extra table points. If the route cannot be built
+(for example the target sits behind the incoming tangent), the span is not drawn as one
+rolling elbow: `compound-bend` when the chord was otherwise on a legal cone, otherwise
+`no-legal-arc`. Fix snaps onto the nearer plane (R-93).
 
-Validation is consequently **simpler** in 3D, not harder: one angle between the tangent and the
-chord, compared against `{0°, 15°, 22.5°, 30°, 45°}`. There is no handedness to choose, because
-the arc's plane is already fixed by the tangent and the chord together.
+The 2D rays are the cones cut by the horizontal working plane, which are exactly the **plan**
+cardinals — so a valid 2D path stays valid in 3D.
 
 | ID | Requirement |
 |----|-------------|
-| R-90 | A 3D segment is valid when the angle between the incoming tangent and the chord matches a permitted half-angle within tolerance. Every azimuth around the cone is equally valid. |
+| R-90 | A 3D segment is valid when (1) the angle between the incoming tangent and the chord matches a permitted half-angle within tolerance, **and** (2) the turn lies in **plan or elevation**, not both (R-90a). A 0° straight run has no turn, so (2) does not apply even if the chord has all three world components. |
+| R-90a | The bend plane is the plane of the incoming tangent and the chord. **Plan** means that plane is vertical-ish in the sense that the chord’s perpendicular to the tangent aligns with world-horizontal left/right. **Elevation** means it aligns with the world-up/down in the vertical plane that contains the tangent. The same angular tolerance as R-15 applies to this cardinal check. A miss is not drawn as one rolling elbow: it is auto-routed (R-90c) or, if that route cannot be built, reason `compound-bend`. |
+| R-90c | Table points may move in two planes; **each duct piece turns in one**. A Y+Z span is not drawn as one rolling elbow. It is auto-routed into planar shop legs (compact 90° plan + 90° elev, either order, leftover as **straights**) without adding a table point. Elbows use the tightest legal radius so the cardinal leftovers stay long. `compound-bend` only when that route cannot be built. A target behind the incoming tangent is not routed. |
 | R-91 | The arc's plane is spanned by the incoming tangent and the chord. Where they are parallel and a turn is still required, any perpendicular is chosen. |
 | R-92 | The entry tangent is **reconstructed from the chord**, not copied from the incoming tangent, so the arc lands exactly on the endpoint. The slack permitted by tolerance stays a kink at the joint, matching R-17. Copying the tangent instead leaves a visible gap. |
-| R-93 | Snapping corrects only the cone angle, preserving the azimuth around the tangent. A cone is a continuum, so this is the minimal correction. |
+| R-93 | Auto-fix / snap corrects the cone angle **and** snaps the azimuth around the tangent to the nearest plan or elevation cardinal, then the minimum-chord distance if needed. With `drainSlope` on, a too-flat straight is pitched to `slopeDeg` (sign follows the existing Δz, or up if level). It does not insert a second table point. |
 | R-94 | Point dragging on the canvas is 2D-only. In 3D, coordinates are edited in the table, since dragging needs a chosen depth plane. |
+| R-90b | 3D guide marks are the **four cardinal generators** of each cone (left, right, up, down in the tangent’s frame), plus the straight-ahead ray — not a full ring. |
+
+### 3.7 Drainage pitch (3D)
+
+A “horizontal” duct is never laid dead-level. Wash-down can run **either way**, so a **rise or a
+fall of at least 3°** along a straight piece is valid. A riser or a steeper slant is also valid.
+Only a too-flat straight is an error. There is no riser checkbox. Derived shop leftovers of a
+Y+Z split are pitched to `slopeDeg` so they drain; leftover elevation is a riser.
+
+Gate: `features.drainSlope`. Default `slopeDeg` **3**, `slopeToleranceDeg` **1**.
+
+| ID | Requirement |
+|----|-------------|
+| R-110 | Pitch is `asin(Δz / chord)` in degrees, +Z up. The floor is `slopeDeg − slopeToleranceDeg` (2° at the shipped defaults). |
+| R-111 | A **straight** (0° sweep) with `|pitch|` below the floor is `off-slope`. Every shop straight — table spans and derived leftovers — must rise or fall by at least `slopeDeg`, or be a riser/slant steeper than that. Elbows (`θ > 0`) are not judged for drain. |
+| R-112 | Drain may be **forward or reverse**. `|pitch|` at or above the floor is valid whether z rises or falls. A 5.7° rise between two table points is valid. |
+| R-113 | An elevation-only chord that is not a legal swept elbow, but whose `|pitch|` meets the floor, is a **sloped straight** (not a 30°/45° fitting) — including slants steeper than 3° and risers. Plan turns stay on the discrete sweep set. |
+| R-114 | **Fix** on a too-flat straight pitches z to `slopeDeg` without a plan turn. |
 
 ---
 
@@ -171,7 +197,7 @@ to them must never need making twice.
 
 ```
 config.json          one file, both apps
-src/core/            dimension-free: angles, arcMath, solve, config, store
+src/core/            dimension-free: angles, arcMath, solve, config, store, flange
 src/2d/              bearings and rays  -> SVG
 src/3d/              tangent vectors and cones -> Three.js
 index.html           2D          index3d.html   3D
@@ -264,9 +290,11 @@ index.html           2D          index3d.html   3D
 | ID | Requirement |
 |----|-------------|
 | R-80 | Dragging empty canvas **pans**. Dragging a point still moves that point. |
-| R-81 | The scroll wheel **zooms about the cursor**, so the point under the pointer stays fixed. Zoom is clamped to a viewport width of 150–24000 units. |
+| R-81 | The scroll wheel **zooms about the cursor**, so the point under the pointer stays fixed. Zoom is clamped to a viewport width of 400–80000 mm. |
 | R-82 | Pan and zoom are **session state, not document state**. They live outside the store, are applied straight to the SVG `viewBox`, trigger no re-render, and are not exported or persisted. |
 | R-83 | A **Fit** button frames all points with padding, preserving the base aspect ratio. |
+| R-83a | 3D **Fit** also frames the **origin** `(0,0,0)`. A triad (X red, Y green, Z blue) and a `0,0,0` label are always in the scene (R-137). |
+| R-83b | Selecting a point row in the table **pans onto that point**: 2D keeps the current zoom; 3D keeps the current approach and stays at least 9000 mm back (R-154). |
 | R-84 | Fit runs automatically on load, after import, and after Add point when the new point would fall outside the current viewport — a new point must never appear off-screen. |
 | R-85 | The grid spans far beyond the base viewport so panning never reveals an unpainted edge. |
 
@@ -325,7 +353,7 @@ reload.
 |----|-------------|
 | R-70 | `config.json` holds three sections: `sweeps`, `features` and `defaults`. |
 | R-71 | `sweeps` sets the permitted swept angles. Values are deduplicated, sorted, and any outside `[0, 180)` are dropped. An empty resulting set is an error. |
-| R-72 | `defaults` seeds the initial values of `initialHeading`, `toleranceDeg`, `ductWidth`, `jacketWidth` and `minRadiusRatio`. Unknown or non-numeric keys are ignored. |
+| R-72 | `defaults` seeds the initial values of `initialHeading`, `initialElevation`, `toleranceDeg`, `ductWidth`, `jacketWidth`, `minRadiusRatio`, `maxPieceLengthMm`, `flangeBendOffsetMm`, `slopeDeg` and `slopeToleranceDeg`. Unknown or non-numeric keys are ignored. |
 | R-73 | `features` holds booleans. A disabled feature hides its UI **and** is excluded from behaviour — it is absent, not merely switched off. |
 | R-74 | Adding a flag must require no new plumbing: add the boolean, tag the owning elements with `data-feature="name"`, and gate behaviour on `state.features.name`. `data-feature` accepts a **comma-separated list**, and the element is shown only when every named flag is enabled. |
 | R-75 | The config is merged section-wise over built-in defaults, so a partial file is valid. A missing or malformed file logs a warning and falls back to the built-ins — it must never take the app down. |
@@ -335,7 +363,8 @@ reload.
 | R-79 | Flag gating is a **product switch, not a security control**: `index3d.html` is still served and the flag lives in a client-readable file. Anything requiring real access control must be enforced server-side. |
 
 Current flags: `duct`, `jacket`, `minBendRadius`, `guideRays`, `snapping`, `importExport`,
-`crossLink`, `threeD` (off by default), `autosave`.
+`crossLink`, `threeD` (off by default), `flanges` (off by default in code, **on** in shipped
+`config.json`), `drainSlope` (off by default in code, **on** in shipped `config.json`), `autosave`.
 
 ---
 
@@ -343,13 +372,48 @@ Current flags: `duct`, `jacket`, `minBendRadius`, `guideRays`, `snapping`, `impo
 
 - Wall thickness / offset outline geometry (R-32)
 - 3D rendering, though the data model is prepared for it (R-13)
-- Multi-arc connections between a single pair of points
+- Multi-arc connections between a single pair of **table points** (fabrication may still cut one
+  centerline span into several manufactured pieces, §10)
 - Self-intersection and collision detection
 - Undo / redo
 
 ---
 
-## 10. Open questions
+## 10. Flanges and manufactured pieces
+
+Two table points are a **centerline** connection. The shop cuts that centerline into **duct
+pieces** bounded by flanges. One authored span can become several pieces. A long circular
+curve is **not** a shop piece: leftover length is fabricated as **straight ducts** plus a
+**compact elbow** (same sweep, smaller radius) that fits `maxPieceLengthMm`.
+
+Coordinates, diameters and lengths are **millimetres**.
+
+```
+[straight ≤ 1050 mm] ═ flange ─ 60 mm ─ compact arc ─ 60 mm ─ flange ═ [straight ≤ 1050 mm]
+                              └──────── elbow piece ────────┘
+```
+
+Gate: `features.flanges`.
+
+| ID | Requirement |
+|----|-------------|
+| R-140 | Lengths and diameters are millimetres. UI labels them `mm`. |
+| R-142 | A **duct piece** is a manufactured run bounded by a flange at each end (path ends count). Pieces are **derived**; they do not add table points. |
+| R-143 | A flange is a **collar + plate** (L-profile). 2D draws the plate edge-on plus a short collar. 3D draws a collar, plate and four bolt holes (visual only). Layout treats the station as a zero-thickness face. |
+| R-144 | **Maximum piece length** is `maxPieceLengthMm` (default **1050 mm**), along the centerline. |
+| R-145 | After elbows are cut, leftover **straights** longer than 1050 mm are **auto-spliced** into even pieces (ceil of length / max) with splice flanges. Leftover from a compacted long curve is treated the same way. The duct is still drawn. The **Duct pieces** dropdown can split a leftover straight further. |
+| R-146 | An **elbow** is its own piece: **flange — 60 mm straight — the arc — 60 mm straight — flange**. Stubs are cut from the adjacent straights, not added as extra length. `flangeBendOffsetMm` default **60**. |
+| R-147 | Each side of the arc must have at least 60 mm of straight. Two bends with less than **120 mm** between their arcs fail (each needs its own stub). Do not put a flange on an arc. |
+| R-149 | A shop elbow is a **compact** fitting, not a long circular arc. Shrink the radius to `r_min` (same sweep) so leftover length becomes leading and trailing **straights** of `(R − r)·tan(θ/2)`, then auto-splice those straights (R-145). Prefer longer straights over a longer curve. If that elbow still exceeds `maxPieceLengthMm`, shrink further to whatever fits in one piece. The solver still validates one legal arc; the drawn shop centerline is the compacted path. Only if even the tightest elbow that fits still exceeds the maximum is it `elbow-too-long` and not split along the bend. |
+| R-151 | Hovering a duct piece shows its flange-to-flange **length (mm)** and **arc degrees** (`θ°`, or `0°` on a straight). 2D and 3D both do this. |
+| R-152 | **Duct pieces** is a dropdown of derived flange-to-flange pieces (kind, length, optional per-piece Ø). It does not add table points. |
+| R-155 | Point markers are **pins**, not a second duct. Drawn diameter stays under 20% of `max(duct, jacket)`. |
+
+A 3D triad at `(0,0,0)` is always drawn (R-137). Selecting a table row pans onto that point without changing 2D zoom or 3D approach, and never closer than 9000 mm (R-154).
+
+---
+
+## 11. Open questions
 
 1. The tolerance slider still tops out at 15°, but the widest gap between adjacent rays is only 7.5°.
    Above 7.5° every bearing inside the ±45° fan is accepted, so the upper half of the slider does
@@ -376,4 +440,8 @@ Current flags: `duct`, `jacket`, `minBendRadius`, `guideRays`, `snapping`, `impo
 | 2026-09-14 | **Split into `src/core/` + `src/2d/` + `src/3d/`** (§4, R-95…R-99) and added the **3D builder** (§3.5, R-90…R-94). The generalisation is that each sweep becomes a cone around the tangent, of which the 2D rays are a planar slice; all the scalar maths moved to core unchanged. 3D rendering uses Three.js from a CDN import map. A single shared `config.json` now drives both apps, with per-app autosave namespaces. |
 | 2026-09-14 | Added a **cross-link** between the two builders (R-100…R-102): a one-shot `sessionStorage` handoff, behind the `crossLink` flag. 2D → 3D is always safe because the 2D rays are the cones cut by the z = 0 plane; 3D → 2D warns when points had a non-zero z, since the projection is a different path. |
 | 2026-09-14 | **Dependency policy reviewed and reaffirmed** (N-05…N-07). Confirmed the project is hand-written apart from Three.js. Noted that N-01 was originally stated more strictly than requested — frameworks were ruled out, libraries were not — and that hand-rolled pan/zoom costs touch and pinch support. Decision: keep it dependency-light, keep the no-build-step rule, and log the gaps rather than close them. |
-| 2026-09-14 | **3D put behind the `threeD` flag, off by default** (R-78, R-79). `index3d.html` now refuses to initialise when the flag is off, before any WebGL context is created, and the 2D cross-link hides with it. `data-feature` gained comma-separated multi-flag support (R-74) so that button can require both `crossLink` and `threeD`. The duplicated flag applier moved into `core/config.js`. |
+| 2026-09-20 | **Plan or elevation, not both (R-90a).** A 3D elbow may turn in Y or in Z, not in both at once. A compound span is flagged even when it sits on a legal cone. Snap / Fix lands on the nearest cardinal. Guides are four generators per cone, not a ring. |
+| 2026-09-20 | **Manufactured pieces (§10).** Max piece **1050 mm**. Each bend is its own elbow: flange — 60 mm — arc — 60 mm — flange. Leftover straights auto-splice. Coordinates labelled millimetres. |
+| 2026-09-20 | **Restored origin, row-focus, piece dropdown.** Point glyphs sized as pins (R-155). 3D triad at `(0,0,0)` (R-137). Table-row select pans the view (R-154). Duct pieces dropdown can split further (R-152). Locked with `tests/invariants.test.mjs`. |
+| 2026-09-20 | **Hover + automatic long-curve compacting.** Hover a piece for length and arc degrees (R-151). Shop elbows shrink to `r_min` (or whatever still fits in 1050 mm) so leftover length is straight, then auto-splice (R-145, R-149). |
+| 2026-09-20 | **Planar pieces + drain pitch.** Table points may move in Y and Z; a duct piece may not. A Y+Z span is auto-routed into compact 90° plan + 90° elev shop legs (R-90c). Every straight must rise or fall ≥ 3° or be a riser/slant (R-110…R-114); derived leftovers are pitched so they drain. |

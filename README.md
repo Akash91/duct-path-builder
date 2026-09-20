@@ -6,8 +6,11 @@ it to `false` to drop back to 2D only.
 
 Enter an ordered list of points; the app connects each consecutive pair with a **single circular
 arc** whose swept angle is exactly **0°, 30°, 45°, 60° or 90°** (configurable), with each arc
-departing along the previous arc's exit tangent. A 0° sweep is a straight run. Connections that
-cannot satisfy that are flagged instead of being drawn wrong.
+departing along the previous arc's exit tangent. Coordinates are **millimetres**. A 0° sweep is a
+straight run. Connections that cannot satisfy that are flagged instead of being drawn wrong.
+
+Two table points are a centerline span, not one manufactured part. A straight longer than **1050 mm**
+is auto-spliced, and each bend is its own elbow with a flange **60 mm** before and after the arc.
 
 Full spec: [docs/requirements.md](docs/requirements.md).
 
@@ -55,10 +58,10 @@ Each ray therefore has a dead zone near its origin — drawn as an amber stub �
 must lie on the ray *and* beyond it. Sharper sweeps have longer dead zones; the straight ray has
 none, since `r = ∞`.
 
-**In 3D the rays become cones.** The tangent is a vector, so the arc can bend in any plane
-containing it, and each half-angle sweeps out a cone rather than a pair of rays. The 2D rays are
-these cones cut by the working plane. Validation gets *simpler*: one angle between the tangent and
-the chord, with no handedness to pick.
+**In 3D a pipe turns in one plane.** Each half-angle still describes a cone around the tangent,
+but a physical elbow only uses the **plan** (Y) or **elevation** (Z) generators of that cone — not
+a rolling offset that changes Y and Z at once. The 2D rays are the plan cuts of those cones. To
+offset in both Y and Z, add an intermediate point.
 
 ## Configuration
 
@@ -70,9 +73,10 @@ rebuild.
   "sweeps": [0, 30, 45, 60, 90],
   "features": { "duct": true, "jacket": true, "minBendRadius": true,
                 "guideRays": true, "snapping": true, "importExport": true,
-                "crossLink": true, "threeD": true, "autosave": true },
+                "crossLink": true, "threeD": true, "flanges": true, "autosave": true },
   "defaults": { "initialHeading": 0, "toleranceDeg": 2,
-                "ductWidth": 18, "jacketWidth": 40, "minRadiusRatio": 1.5 }
+                "ductWidth": 180, "jacketWidth": 400, "minRadiusRatio": 1.5,
+                "maxPieceLengthMm": 1050, "flangeBendOffsetMm": 60 }
 }
 ```
 
@@ -100,10 +104,10 @@ server-side.
 | Path | Role |
 |------|------|
 | `config.json` | Sweep set, feature flags and seed values — shared by both apps. |
-| `src/core/` | Dimension-free: `angles`, `arcMath`, `solve`, `config`, `store`. Never imports from `2d/` or `3d/`. |
+| `src/core/` | Dimension-free: `angles`, `arcMath`, `solve`, `config`, `store`, `flange`, `view`, `piecePanel`. Never imports from `2d/` or `3d/`. |
 | `src/2d/` | Bearings and rays, rendered to SVG. |
 | `src/3d/` | Tangent vectors and cones, rendered with Three.js. |
-| `tests/` | `core`, `geometry2d`, `geometry3d`. |
+| `tests/` | `core`, `geometry2d`, `geometry3d`, `flange`, `invariants`. |
 
 `walkPath` in core treats the tangent as opaque, so 2D passes a bearing in degrees and 3D a unit
 vector through the very same loop.
@@ -119,5 +123,6 @@ vector through the very same loop.
 - `y` increases **downward** (SVG convention), so positive angles turn clockwise on screen.
 - A 0° sweep renders with `L` rather than `A`, and carries the tangent through unchanged.
 - Errors do not cascade: after a violation the tangent resets to that segment's straight chord.
+- Coordinates, diameters and piece lengths are **millimetres**.
 - The duct is a stroke only — width maps to `stroke-width`. Wall thickness is out of scope.
-- Points store a `z` field fixed at `0`, reserved for a future 3D mode.
+- Points store a `z` field; the 2D app leaves it at `0`.

@@ -2,13 +2,31 @@ import { makePoint, reserveIds } from './solve.js';
 import { DEFAULT_CONFIG } from './config.js';
 
 // Namespaced per app, so the 2D and 3D builders never overwrite each other's autosave.
-let storageKey = 'curve-path-builder/2d/v1';
+// v2: coordinates and diameters are millimetres (R-140). Old v1 saves are left unused.
+let storageKey = 'curve-path-builder/2d/v2';
 
 let seed = { ...DEFAULT_CONFIG.defaults };
 let features = { ...DEFAULT_CONFIG.features };
 
+// Straight — 30° plan elbow — straight, so the demo has leftover to splice and 60 mm stubs.
+// In 3D with drain on, the same XY path sits on a 3° ramp so the opening straight can drain.
+const demoPoints = () => {
+  const pts = [
+    makePoint(0, 0),
+    makePoint(1600, 0),
+    makePoint(2083.0, 129.4),
+    makePoint(3295.4, 829.4),
+  ];
+  if (storageKey.includes('/3d/') && features.drainSlope) {
+    const deg = Number.isFinite(seed.slopeDeg) ? seed.slopeDeg : 3;
+    const k = Math.tan((deg * Math.PI) / 180);
+    for (const p of pts) p.z = p.x * k;
+  }
+  return pts;
+};
+
 const defaults = () => ({
-  points: [makePoint(150, 400), makePoint(420, 330), makePoint(700, 350)],
+  points: demoPoints(),
   ...seed,
   features,
   // A disabled feature is also an unchecked toggle, so nothing else needs to know.
@@ -17,6 +35,9 @@ const defaults = () => ({
   showGuides: features.guideRays,
   snapEnabled: features.snapping,
   selectedId: null,
+  selectedPieceId: null,
+  pieceOverrides: {},
+  pieceSplits: {},
 });
 
 let state = defaults();
@@ -24,7 +45,7 @@ const listeners = new Set();
 
 /** Apply a loaded config. Must run before restore() and the first render. */
 export function configure(config, namespace = '2d') {
-  storageKey = `curve-path-builder/${namespace}/v1`;
+  storageKey = `curve-path-builder/${namespace}/v2`;
   seed = { ...DEFAULT_CONFIG.defaults, ...config.defaults };
   features = { ...DEFAULT_CONFIG.features, ...config.features };
   state = defaults();
@@ -78,12 +99,57 @@ export function reorderPoint(id, delta) {
 }
 
 export function clearPoints() {
-  update({ points: [], selectedId: null });
+  update({
+    points: [],
+    selectedId: null,
+    selectedPieceId: null,
+    pieceOverrides: {},
+    pieceSplits: {},
+  });
 }
 
+export function selectPiece(id) {
+  update({ selectedPieceId: id || null });
+}
+
+export function setPieceOverride(id, patch) {
+  if (!id) return;
+  update((s) => {
+    const prev = s.pieceOverrides?.[id] ?? {};
+    const next = { ...prev };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value == null || Number.isNaN(value)) delete next[key];
+      else if (Number.isFinite(value)) next[key] = value;
+    }
+    const pieceOverrides = { ...s.pieceOverrides };
+    if (Object.keys(next).length === 0) delete pieceOverrides[id];
+    else pieceOverrides[id] = next;
+    return { pieceOverrides };
+  });
+}
+
+export function splitPiece(gapKey, cuts = 2) {
+  const n = Math.max(2, Math.floor(Number(cuts) || 2));
+  if (!gapKey) return;
+  update((s) => ({
+    pieceSplits: { ...s.pieceSplits, [gapKey]: n },
+    selectedPieceId: null,
+  }));
+}
+
+const persisted = [
+  'initialHeading', 'initialElevation', 'toleranceDeg',
+  'ductWidth', 'jacketWidth', 'minRadiusRatio',
+  'maxPieceLengthMm', 'flangeBendOffsetMm',
+  'slopeDeg', 'slopeToleranceDeg',
+];
+
 export function toJSON() {
-  const { points, initialHeading, initialElevation, toleranceDeg, ductWidth, jacketWidth, minRadiusRatio } = state;
-  return JSON.stringify({ version: 1, points, initialHeading, initialElevation, toleranceDeg, ductWidth, jacketWidth, minRadiusRatio }, null, 2);
+  const data = { version: 2, points: state.points };
+  for (const key of persisted) data[key] = state[key];
+  data.pieceOverrides = state.pieceOverrides ?? {};
+  data.pieceSplits = state.pieceSplits ?? {};
+  return JSON.stringify(data, null, 2);
 }
 
 export function fromJSON(text) {
@@ -101,16 +167,15 @@ export function fromJSON(text) {
 
   const pick = (value, key) => (Number.isFinite(value) ? value : seed[key]);
 
-  update({
+  const patch = {
     points,
-    initialHeading: pick(data.initialHeading, 'initialHeading'),
-    initialElevation: pick(data.initialElevation, 'initialElevation'),
-    toleranceDeg: pick(data.toleranceDeg, 'toleranceDeg'),
-    ductWidth: pick(data.ductWidth, 'ductWidth'),
-    jacketWidth: pick(data.jacketWidth, 'jacketWidth'),
-    minRadiusRatio: pick(data.minRadiusRatio, 'minRadiusRatio'),
     selectedId: null,
-  });
+    selectedPieceId: null,
+    pieceOverrides: (data.pieceOverrides && typeof data.pieceOverrides === 'object') ? data.pieceOverrides : {},
+    pieceSplits: (data.pieceSplits && typeof data.pieceSplits === 'object') ? data.pieceSplits : {},
+  };
+  for (const key of persisted) patch[key] = pick(data[key], key);
+  update(patch);
 }
 
 function save() {
