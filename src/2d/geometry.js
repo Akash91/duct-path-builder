@@ -4,9 +4,11 @@
 import { DEG, normalizeDeg, angleDelta, sweepCandidates, nearestSweep } from '../core/angles.js';
 import { EPS, radiusFor, minChordFor, isTooTight } from '../core/arcMath.js';
 import { walkPath } from '../core/solve.js';
-import { compactBendParams, fabricationSpans } from '../core/flange.js';
+import { elbowLayout } from '../core/pieces.js';
 
 export { DEG, minChordFor };
+
+const step = (p, deg, d) => ({ x: p.x + d * Math.cos(deg * DEG), y: p.y + d * Math.sin(deg * DEG) });
 
 export function bearingDeg(p0, p1) {
   return Math.atan2(p1.y - p0.y, p1.x - p0.x) / DEG;
@@ -79,11 +81,12 @@ export function arcFromChord(p0, p1, theta, dir) {
  * `tOut` is the tangent handed to the next segment. On a violation it falls back to the
  * straight chord bearing so a single bad point does not invalidate everything after it (R-19).
  */
-export function classifySegment(p0, p1, tauDeg, toleranceDeg, minRadius = 0) {
+export function classifySegment(p0, p1, tauDeg, opts = {}) {
+  const { toleranceDeg = 2, minRadius = 0, flangeOffset = 60, maxPieceLength = 1050 } = opts;
   const chord = distance(p0, p1);
 
   if (chord < EPS) {
-    return { ok: false, tooTight: false, reason: 'degenerate', chord: 0, phi: tauDeg, error: 0, nearest: null, arc: null, minRadius, tOut: tauDeg };
+    return { ok: false, tooTight: false, reason: 'degenerate', chord: 0, phi: tauDeg, error: 0, nearest: null, arc: null, shop: null, minRadius, tOut: tauDeg };
   }
 
   const phi = bearingDeg(p0, p1);
@@ -93,15 +96,70 @@ export function classifySegment(p0, p1, tauDeg, toleranceDeg, minRadius = 0) {
     // Built from the actual chord, so the swept angle stays exactly one of the permitted set (R-17).
     const arc = arcFromChord(p0, p1, nearest.theta, nearest.dir);
     const tooTight = isTooTight(arc.radius, minRadius);
+    const shop = arc.straight
+      ? { kind: 'straight', length: chord }
+      : { kind: 'elbow', ...elbowLayout({ tableRadius: arc.radius, theta: arc.theta, minRadius, flangeOffset, maxPieceLength }) };
+
     return {
-      ok: true, tooTight, reason: tooTight ? 'too-tight' : null,
-      chord, phi, error: nearest.error, nearest, arc, minRadius,
+      ok: true, tooTight, reason: shop.reason ?? (tooTight ? 'too-tight' : null),
+      chord, phi, error: nearest.error, nearest, arc, shop, minRadius,
       minChord: minChordFor(nearest.theta, minRadius),
       tOut: arc.tEnd,
     };
   }
 
-  return { ok: false, tooTight: false, reason: 'no-legal-arc', chord, phi, error: nearest.error, nearest, arc: null, minRadius, tOut: phi };
+  return { ok: false, tooTight: false, reason: 'no-legal-arc', chord, phi, error: nearest.error, nearest, arc: null, shop: null, minRadius, tOut: phi };
+}
+
+/** Samples along a circular arc of radius `radius` leaving `from` on bearing `tStart`. */
+export function arcSamples(from, tStart, dir, radius, theta, divisions = 24) {
+  const toCentre = tStart + dir * 90;
+  const center = step(from, toCentre, radius);
+  const spoke = bearingDeg(center, from);
+
+  const out = [];
+  for (let i = 0; i <= divisions; i++) {
+    out.push(step(center, spoke + (dir * theta * i) / divisions, radius));
+  }
+  return out;
+}
+
+/**
+ * Expand a span into the stretches a shop would build: a plain run, or the lead / amber arc /
+ * trail of a compact elbow whose radius has been shrunk to the bend limit.
+ */
+export function expandSegment(seg, divisions = 24) {
+  const { from, to, shop, arc } = seg;
+  if (!seg.ok || !shop) return [];
+  if (shop.kind === 'straight') return [{ kind: 'straight', points: [from, to] }];
+
+  const { leftover, radius, theta } = shop;
+  const f1 = step(from, arc.tStart, leftover);
+  const f2 = step(to, arc.tEnd, -leftover);
+
+  const out = [];
+  if (leftover > EPS) out.push({ kind: 'straight', points: [from, f1] });
+  out.push({ kind: 'elbow', arcDeg: theta, points: arcSamples(f1, arc.tStart, arc.dir, radius, theta, divisions) });
+  if (leftover > EPS) out.push({ kind: 'straight', points: [f2, to] });
+  return out;
+}
+
+/** The shop centerline of a whole run, as one polyline plus the kind-tagged stretches on it. */
+export function expandRun(run, divisions = 24) {
+  const stretches = [];
+  for (const seg of run) {
+    for (const st of expandSegment(seg, divisions)) stretches.push({ ...st, segIndex: seg.index });
+  }
+
+  const points = [];
+  for (const st of stretches) {
+    for (const p of st.points) {
+      const last = points[points.length - 1];
+      if (last && distance(last, p) < 1e-6) continue;
+      points.push(p);
+    }
+  }
+  return { points, stretches };
 }
 
 /**
@@ -114,87 +172,9 @@ export function snapToLegal(p0, p1, tauDeg, minRadius = 0) {
 
   const { bearing, theta } = nearestLegal(bearingDeg(p0, p1), tauDeg);
   const d = Math.max(chord, minChordFor(theta, minRadius));
-  const rad = bearing * DEG;
-  return { ...p1, x: p0.x + d * Math.cos(rad), y: p0.y + d * Math.sin(rad) };
+  return { ...p1, ...step(p0, bearing, d) };
 }
 
-export function solvePath(points, initialHeadingDeg, toleranceDeg, minRadius = 0) {
-  return walkPath(points, initialHeadingDeg, (a, b, tau) =>
-    classifySegment(a, b, tau, toleranceDeg, minRadius));
-}
-
-/** Pose at `dist` along a solved segment, for flange stations (R-143). */
-export function poseAlong(seg, dist) {
-  const { from, to, arc } = seg;
-  if (!arc || arc.straight || !Number.isFinite(arc.radius)) {
-    const L = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-    const t = Math.min(1, Math.max(0, dist / L));
-    return {
-      x: from.x + (to.x - from.x) * t,
-      y: from.y + (to.y - from.y) * t,
-      tangentDeg: arc?.tStart ?? Math.atan2(to.y - from.y, to.x - from.x) / DEG,
-    };
-  }
-  const ang = dist / arc.radius;
-  const start = Math.atan2(from.y - arc.center.y, from.x - arc.center.x);
-  const a = start + arc.dir * ang;
-  return {
-    x: arc.center.x + arc.radius * Math.cos(a),
-    y: arc.center.y + arc.radius * Math.sin(a),
-    tangentDeg: normalizeDeg(arc.tStart + arc.dir * (ang / DEG)),
-  };
-}
-
-/**
- * Shop centerline for a solved run: a bend becomes lead straight + compact elbow + trail
- * so leftover length stays on straights (R-149).
- * Lengths match `fabricationSpans`, so flange stations map onto this path.
- */
-export function expandRun(run, options) {
-  if (!options || !run?.length) return run ?? [];
-  const { offsetMm, maxPieceMm, minRadius = 0 } = options;
-  const out = [];
-  for (const seg of run) {
-    const spans = fabricationSpans(seg, offsetMm, maxPieceMm, minRadius);
-    const params = compactBendParams(seg, offsetMm, maxPieceMm, minRadius);
-    const t0 = (seg.arc?.tStart ?? 0) * DEG;
-    const t1 = (seg.arc?.tEnd ?? 0) * DEG;
-    const S = {
-      x: seg.from.x + params.lead * Math.cos(t0),
-      y: seg.from.y + params.lead * Math.sin(t0),
-    };
-    const E = {
-      x: seg.to.x - params.trail * Math.cos(t1),
-      y: seg.to.y - params.trail * Math.sin(t1),
-    };
-    for (const span of spans) {
-      if (span.role === 'full') {
-        out.push(seg);
-        continue;
-      }
-      if (span.role === 'lead') {
-        out.push({
-          ...seg,
-          from: seg.from,
-          to: S,
-          chord: span.length,
-          arc: { straight: true, theta: 0, tStart: seg.arc.tStart, tEnd: seg.arc.tStart, radius: Infinity },
-        });
-        continue;
-      }
-      if (span.role === 'trail') {
-        out.push({
-          ...seg,
-          from: E,
-          to: seg.to,
-          chord: span.length,
-          arc: { straight: true, theta: 0, tStart: seg.arc.tEnd, tEnd: seg.arc.tEnd, radius: Infinity },
-        });
-        continue;
-      }
-      const arc = arcFromChord(S, E, span.theta, seg.arc.dir);
-      out.push({ ...seg, from: S, to: E, chord: span.length, arc });
-    }
-  }
-  return out;
+export function solvePath(points, initialHeadingDeg, opts = {}) {
+  return walkPath(points, initialHeadingDeg, (a, b, tau) => classifySegment(a, b, tau, opts));
 }

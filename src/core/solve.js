@@ -76,3 +76,18 @@ export function minRadiusFor(state) {
   const jacket = state.features.jacket ? state.jacketWidth : 0;
   return state.minRadiusRatio * Math.max(duct, jacket);
 }
+
+/** Everything the classifier and the piece layout need, gathered from state in one place. */
+export function shopOptions(state) {
+  return {
+    toleranceDeg: state.toleranceDeg,
+    minRadius: minRadiusFor(state),
+    flangeOffset: state.elbowFlangeOffset,
+    maxPieceLength: state.maxPieceLength,
+    minLead: state.angledMinLead,
+    slopeDeg: state.slopeDeg,
+    slopeToleranceDeg: state.slopeToleranceDeg,
+    drain: Boolean(state.features.drainSlope),
+    extraSplits: state.extraSplits ?? {},
+  };
+}

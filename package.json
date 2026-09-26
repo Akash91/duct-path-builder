@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "2D arc path builder with 30/45/60 degree swept-angle and tangent-continuity constraints",
+  "description": "Plant-duct path builder in millimetres: 30/45/60/90 degree swept-angle arcs with tangent continuity, derived flange-to-flange shop pieces, and drain pitch",
   "scripts": {
     "test": "node --test tests/",
     "serve": "python3 -m http.server 8000"

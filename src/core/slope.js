@@ -1,33 +1,32 @@
-// Drainage pitch (docs/requirements.md §3.7). Horizontal shop pieces must not sit dead-level:
-// wash-down can run either way, so a rise or a fall of at least `slopeDeg` is valid.
+// Drain pitch. A wash-down duct is never laid dead level, but it may fall either way, so the
+// test is on |pitch| rather than on a signed direction. Dimension-free: callers supply the
+// rise and the chord they were measured over.
 
 import { DEG } from './angles.js';
-import { EPS } from './arcMath.js';
 
-export const DEFAULT_SLOPE_DEG = 3;
-export const DEFAULT_SLOPE_TOL_DEG = 1;
-
-export function slopeOptionsFor(state) {
-  if (!state?.features?.drainSlope) return null;
-  return {
-    slopeDeg: Number.isFinite(state.slopeDeg) ? state.slopeDeg : DEFAULT_SLOPE_DEG,
-    slopeTol: Number.isFinite(state.slopeToleranceDeg) ? state.slopeToleranceDeg : DEFAULT_SLOPE_TOL_DEG,
-  };
+/** Pitch of a run, in degrees, +Z up. */
+export function pitchDeg(rise, chord) {
+  if (!(chord > 0)) return 0;
+  return Math.asin(Math.max(-1, Math.min(1, rise / chord))) / DEG;
 }
 
-/** Elevation of the chord above the XY plane, degrees. +Z is up. */
-export function pitchDeg(p0, p1) {
-  const dz = (p1?.z ?? 0) - (p0?.z ?? 0);
-  const chord = Math.hypot((p1?.x ?? 0) - (p0?.x ?? 0), (p1?.y ?? 0) - (p0?.y ?? 0), dz);
-  if (!(chord > EPS)) return 0;
-  return Math.asin(Math.min(1, Math.max(-1, dz / chord))) / DEG;
+/** Shallowest pitch still accepted as draining. */
+export function drainFloorDeg(slopeDeg, slopeToleranceDeg) {
+  return Math.max(0, slopeDeg - slopeToleranceDeg);
 }
 
-export function slopeFloorDeg(slopeDeg = DEFAULT_SLOPE_DEG, slopeTol = DEFAULT_SLOPE_TOL_DEG) {
-  return Math.max(0, slopeDeg - slopeTol);
+/** A rise or a fall at or above the floor both drain; only near-level is off-slope. */
+export function drains(rise, chord, slopeDeg, slopeToleranceDeg) {
+  const floor = drainFloorDeg(slopeDeg, slopeToleranceDeg);
+  if (floor <= 0) return true;
+  return Math.abs(pitchDeg(rise, chord)) >= floor - 1e-9;
 }
 
-/** True when a run is too level to drain either way. */
-export function isTooFlat(p0, p1, slopeDeg = DEFAULT_SLOPE_DEG, slopeTol = DEFAULT_SLOPE_TOL_DEG) {
-  return Math.abs(pitchDeg(p0, p1)) + 1e-9 < slopeFloorDeg(slopeDeg, slopeTol);
+/**
+ * Rise that puts a run of horizontal length `run` exactly on `slopeDeg`.
+ * The sign follows the fall the user already drew; a level run is pitched up.
+ */
+export function pitchedRise(run, slopeDeg, existingRise = 0) {
+  const sign = existingRise < 0 ? -1 : 1;
+  return sign * Math.abs(run) * Math.tan(slopeDeg * DEG);
 }

@@ -1,43 +1,39 @@
 import { makePoint, reserveIds } from './solve.js';
 import { DEFAULT_CONFIG } from './config.js';
+import { DEG } from './angles.js';
 
 // Namespaced per app, so the 2D and 3D builders never overwrite each other's autosave.
-// v2: coordinates and diameters are millimetres (R-140). Old v1 saves are left unused.
+// v2 is the millimetre era; any older centimetre save is left where it is rather than rescaled.
 let storageKey = 'curve-path-builder/2d/v2';
+let app = '2d';
 
 let seed = { ...DEFAULT_CONFIG.defaults };
 let features = { ...DEFAULT_CONFIG.features };
 
-// Straight — 30° plan elbow — straight, so the demo has leftover to splice and 60 mm stubs.
-// In 3D with drain on, the same XY path sits on a 3° ramp so the opening straight can drain.
-const demoPoints = () => {
-  const pts = [
-    makePoint(0, 0),
-    makePoint(1600, 0),
-    makePoint(2083.0, 129.4),
-    makePoint(3295.4, 829.4),
-  ];
-  if (storageKey.includes('/3d/') && features.drainSlope) {
-    const deg = Number.isFinite(seed.slopeDeg) ? seed.slopeDeg : 3;
-    const k = Math.tan((deg * Math.PI) / 180);
-    for (const p of pts) p.z = p.x * k;
-  }
-  return pts;
-};
+/** The shipped demo path, in millimetres. */
+const DEMO = [[0, 0], [1600, 0], [2083.0, 129.4], [3295.4, 829.4]];
+
+/** In 3D the opening run has to drain, so the demo sits on the configured ramp. */
+function demoPoints() {
+  const ramp = app === '3d' && features.drainSlope ? Math.tan(seed.slopeDeg * DEG) : 0;
+  return DEMO.map(([x, y]) => makePoint(x, y, Math.round(x * ramp * 10) / 10));
+}
 
 const defaults = () => ({
   points: demoPoints(),
   ...seed,
   features,
+  // The bands and their fittings start hidden: the centerline is what the user is authoring,
+  // and a 400 mm jacket buries it. They still count towards the bend limit while hidden.
+  showDuct: false,
+  showJacket: false,
+  showFlanges: false,
   // A disabled feature is also an unchecked toggle, so nothing else needs to know.
-  showDuct: features.duct,
-  showJacket: features.jacket,
   showGuides: features.guideRays,
   snapEnabled: features.snapping,
   selectedId: null,
-  selectedPieceId: null,
-  pieceOverrides: {},
-  pieceSplits: {},
+  selectedPieceIndex: 0,
+  extraSplits: {},
 });
 
 let state = defaults();
@@ -45,6 +41,7 @@ const listeners = new Set();
 
 /** Apply a loaded config. Must run before restore() and the first render. */
 export function configure(config, namespace = '2d') {
+  app = namespace;
   storageKey = `curve-path-builder/${namespace}/v2`;
   seed = { ...DEFAULT_CONFIG.defaults, ...config.defaults };
   features = { ...DEFAULT_CONFIG.features, ...config.features };
@@ -99,57 +96,21 @@ export function reorderPoint(id, delta) {
 }
 
 export function clearPoints() {
-  update({
-    points: [],
-    selectedId: null,
-    selectedPieceId: null,
-    pieceOverrides: {},
-    pieceSplits: {},
-  });
+  update({ points: [], selectedId: null });
 }
 
-export function selectPiece(id) {
-  update({ selectedPieceId: id || null });
-}
-
-export function setPieceOverride(id, patch) {
-  if (!id) return;
-  update((s) => {
-    const prev = s.pieceOverrides?.[id] ?? {};
-    const next = { ...prev };
-    for (const [key, value] of Object.entries(patch)) {
-      if (value == null || Number.isNaN(value)) delete next[key];
-      else if (Number.isFinite(value)) next[key] = value;
-    }
-    const pieceOverrides = { ...s.pieceOverrides };
-    if (Object.keys(next).length === 0) delete pieceOverrides[id];
-    else pieceOverrides[id] = next;
-    return { pieceOverrides };
-  });
-}
-
-export function splitPiece(gapKey, cuts = 2) {
-  const n = Math.max(2, Math.floor(Number(cuts) || 2));
-  if (!gapKey) return;
-  update((s) => ({
-    pieceSplits: { ...s.pieceSplits, [gapKey]: n },
-    selectedPieceId: null,
-  }));
-}
-
-const persisted = [
+/** Keys carried through export, import, autosave and the cross-link handoff alike. */
+const SETTINGS = [
   'initialHeading', 'initialElevation', 'toleranceDeg',
   'ductWidth', 'jacketWidth', 'minRadiusRatio',
-  'maxPieceLengthMm', 'flangeBendOffsetMm',
+  'maxPieceLength', 'elbowFlangeOffset', 'angledMinLead',
   'slopeDeg', 'slopeToleranceDeg',
 ];
 
 export function toJSON() {
-  const data = { version: 2, points: state.points };
-  for (const key of persisted) data[key] = state[key];
-  data.pieceOverrides = state.pieceOverrides ?? {};
-  data.pieceSplits = state.pieceSplits ?? {};
-  return JSON.stringify(data, null, 2);
+  const out = { version: 2, units: 'mm', points: state.points };
+  for (const key of SETTINGS) out[key] = state[key];
+  return JSON.stringify(out, null, 2);
 }
 
 export function fromJSON(text) {
@@ -165,16 +126,9 @@ export function fromJSON(text) {
   });
   reserveIds(points);
 
-  const pick = (value, key) => (Number.isFinite(value) ? value : seed[key]);
+  const patch = { points, selectedId: null, selectedPieceIndex: 0 };
+  for (const key of SETTINGS) patch[key] = Number.isFinite(data[key]) ? data[key] : seed[key];
 
-  const patch = {
-    points,
-    selectedId: null,
-    selectedPieceId: null,
-    pieceOverrides: (data.pieceOverrides && typeof data.pieceOverrides === 'object') ? data.pieceOverrides : {},
-    pieceSplits: (data.pieceSplits && typeof data.pieceSplits === 'object') ? data.pieceSplits : {},
-  };
-  for (const key of persisted) patch[key] = pick(data[key], key);
   update(patch);
 }
 

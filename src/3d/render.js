@@ -3,67 +3,86 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { legalCones, legalDirections, samplePoints, poseAlong, expandRun } from './geometry.js';
+import { coneGuides, expandRun } from './geometry.js';
 import { minChordFor } from '../core/arcMath.js';
-import { minRadiusFor, tangentAt, validRuns } from '../core/solve.js';
-import {
-  flangeOptionsFor, layoutPieces, flangeDrawDims, poseOnRun, defaultAddReach, pickPieceAt3d,
-} from '../core/flange.js';
-import { POINT_SPHERE_R, ORIGIN_AXIS_MM, MIN_FOCUS_STANDOFF, focusCameraOnPoint } from '../core/view.js';
+import { minRadiusFor, tangentAt, validRuns, shopOptions } from '../core/solve.js';
+import { layoutPieces, pieceLabel } from '../core/pieces.js';
+import { cumulative, stationAt, slice } from '../core/polyline.js';
+import { focusEye, boundsWithOrigin, FOCUS_STANDOFF } from '../core/view.js';
 import * as V from './vec3.js';
 
 const COLOR = {
   ok: 0x4ea8ff,
+  elbow: 0xf0a020,
+  kick: 0x5ee0c0,
   tight: 0xd9a441,
   error: 0xff5f56,
   duct: 0x4ea8ff,
   jacket: 0x8ba0bd,
+  flange: 0xa9b6c7,
   point: 0xdfe6ef,
   selected: 0x4ea8ff,
   guide: 0x3a4a5e,
   blocked: 0xd9a441,
 };
 
-const toVec3 = (p) => new THREE.Vector3(p.x, p.y, p.z);
+/** The triad is the only thing in the scene that never moves, so it reads as the datum. */
+const AXIS_LENGTH = 1500;
+const AXIS_COLOR = { x: 0xff5f56, y: 0x5ee08a, z: 0x4ea8ff };
 
-/** World origin (0,0,0): RGB triad is XYZ, plus a labelled dot, so the grid has a readable zero. */
-function originReference() {
+const toVec3 = (p) => new THREE.Vector3(p.x, p.y, p.z ?? 0);
+const mm = (v) => `${v.toFixed(0)} mm`;
+
+/**
+ * A curve that walks a polyline by arc length. The samples are already real straights and real
+ * circular arcs, so interpolating between them *is* the centerline; fitting a spline through
+ * them would bulge around any table point that happens to sit on a tangent.
+ */
+class ShopCurve extends THREE.Curve {
+  constructor(points) {
+    super();
+    this.pts = points;
+    this.cum = cumulative(points);
+    this.total = this.cum[this.cum.length - 1];
+  }
+
+  getPoint(t, target = new THREE.Vector3()) {
+    const at = stationAt(this.pts, t * this.total, this.cum);
+    return target.set(at.point.x, at.point.y, at.point.z);
+  }
+}
+
+function labelSprite(text, color = 0x8a97a8) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const g = canvas.getContext('2d');
+  g.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+  g.font = '32px ui-sans-serif, sans-serif';
+  g.textBaseline = 'middle';
+  g.fillText(text, 8, 32);
+
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas), transparent: true, depthTest: false,
+  }));
+  sprite.scale.set(900, 225, 1);
+  return sprite;
+}
+
+/** X red, Y green, Z blue at (0,0,0), always drawn, plus the label that names it. */
+function originTriad() {
   const group = new THREE.Group();
-  group.name = 'origin-reference';
-  group.add(new THREE.AxesHelper(ORIGIN_AXIS_MM));
+  const axes = { x: [AXIS_LENGTH, 0, 0], y: [0, AXIS_LENGTH, 0], z: [0, 0, AXIS_LENGTH] };
 
-  const dot = new THREE.Mesh(
-    new THREE.SphereGeometry(6, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffffff }),
-  );
-  group.add(dot);
+  for (const [name, end] of Object.entries(axes)) {
+    const geom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(...end)]);
+    group.add(new THREE.Line(geom, new THREE.LineBasicMaterial({ color: AXIS_COLOR[name], depthTest: false })));
+  }
 
-  const label = (text, color, position) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 64;
-    const c = canvas.getContext('2d');
-    c.fillStyle = color;
-    c.font = '600 36px ui-sans-serif, system-ui, sans-serif';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(text, 128, 32);
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: new THREE.CanvasTexture(canvas),
-      depthTest: false,
-      transparent: true,
-    }));
-    sprite.position.copy(position);
-    sprite.scale.set(180, 45, 1);
-    sprite.renderOrder = 20;
-    return sprite;
-  };
-
-  const a = ORIGIN_AXIS_MM * 1.12;
-  group.add(label('X', '#ff5f56', new THREE.Vector3(a, 0, 0)));
-  group.add(label('Y', '#3dd68c', new THREE.Vector3(0, a, 0)));
-  group.add(label('Z', '#4ea8ff', new THREE.Vector3(0, 0, a)));
-  group.add(label('0,0,0', '#dfe6ef', new THREE.Vector3(48, 48, -32)));
+  const label = labelSprite('0,0,0');
+  label.position.set(120, 120, 120);
+  group.add(label);
+  group.name = 'origin-triad';
   return group;
 }
 
@@ -72,9 +91,9 @@ export function initScene(container) {
   scene.background = new THREE.Color(0x0d1117);
 
   // The model treats +Z as up, so the camera must agree or orbiting feels wrong.
-  const camera = new THREE.PerspectiveCamera(45, 1, 1, 60000);
+  const camera = new THREE.PerspectiveCamera(45, 1, 10, 600000);
   camera.up.set(0, 0, 1);
-  camera.position.set(2400, -2800, 1800);
+  camera.position.set(7000, -9000, 6000);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -85,27 +104,26 @@ export function initScene(container) {
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.6));
   const key = new THREE.DirectionalLight(0xffffff, 1.7);
-  key.position.set(1800, -2400, 3600);
+  key.position.set(6000, -8000, 12000);
   scene.add(key);
 
-  const grid = new THREE.GridHelper(20000, 40, 0x2a3441, 0x1d2530);
+  const grid = new THREE.GridHelper(40000, 40, 0x2a3441, 0x1d2530);
   grid.rotation.x = Math.PI / 2; // GridHelper is XZ by default; the model works in XY
   scene.add(grid);
-  scene.add(originReference());
+  scene.add(originTriad());
 
   const groups = {
     jacket: new THREE.Group(),
     duct: new THREE.Group(),
-    path: new THREE.Group(),
     flanges: new THREE.Group(),
-    hits: new THREE.Group(),
+    path: new THREE.Group(),
     guides: new THREE.Group(),
     points: new THREE.Group(),
+    pieces: new THREE.Group(),
   };
   for (const g of Object.values(groups)) scene.add(g);
-  groups.hits.visible = true;
 
-  const ctx = { scene, camera, renderer, controls, groups, container };
+  const ctx = { scene, camera, renderer, controls, groups, container, raycaster: new THREE.Raycaster() };
 
   function resize() {
     const { clientWidth: w, clientHeight: h } = container;
@@ -135,84 +153,138 @@ function clearGroup(group) {
   }
 }
 
-/** One continuous curve through a run, so bands join smoothly and cap only at the open ends. */
-function curveForRun(run) {
-  const points = [];
-  for (const seg of run) {
-    const sampled = samplePoints(seg, seg.arc.straight ? 1 : 24);
-    for (let i = 0; i < sampled.length; i++) {
-      if (i === 0 && points.length > 0) continue; // joints are shared
-      points.push(toVec3(sampled[i]));
-    }
-  }
-  return points.length >= 2 ? new THREE.CatmullRomCurve3(points, false, 'centripetal') : null;
-}
-
 /** Flat end caps, matching the 2D butt-cap rule (R-35). */
-function addCaps(group, curve, radius, material, order) {
+function addCaps(group, curve, radius, material) {
   for (const t of [0, 1]) {
     const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 28), material);
     const at = curve.getPointAt(t);
     disc.position.copy(at);
     disc.lookAt(at.clone().add(curve.getTangentAt(t)));
-    disc.renderOrder = order;
     group.add(disc);
   }
 }
 
-/**
- * `order` layers the bands the way the 2D view stacks its SVG layers: jacket first, duct over it.
- * The bands are coaxial, so their bounding spheres share a centre and the renderer's own
- * back-to-front sort cannot separate them; without depthWrite off, whichever draws first would
- * depth-reject the other outright rather than blending with it.
- */
-function addBand(group, runs, diameter, color, opacity, order) {
+function addBand(group, runs, diameter, color, opacity) {
   const material = new THREE.MeshStandardMaterial({
     color, transparent: true, opacity, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide,
-    depthWrite: false,
   });
 
-  for (const run of runs) {
-    const curve = curveForRun(run);
-    if (!curve) continue;
-    const segments = Math.max(24, run.length * 26);
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, segments, diameter / 2, 24, false), material);
-    tube.renderOrder = order;
-    group.add(tube);
-    addCaps(group, curve, diameter / 2, material, order);
+  for (const r of runs) {
+    if (r.points.length < 2) continue;
+    const curve = new ShopCurve(r.points);
+    group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(32, r.points.length * 2), diameter / 2, 24, false), material));
+    addCaps(group, curve, diameter / 2, material);
   }
 }
 
-function addCenterline(group, solution, shopRuns, flangesOn) {
-  if (flangesOn) {
-    for (const run of shopRuns ?? []) {
-      for (const seg of run) {
-        const pts = samplePoints(seg, seg.arc.straight ? 1 : 24).map(toVec3);
-        const material = new THREE.LineBasicMaterial({ color: seg.tooTight ? COLOR.tight : COLOR.ok });
-        group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), material));
-      }
-    }
-  } else {
-    for (const seg of solution.segments) {
-      if (!seg.ok) continue;
-      const pts = samplePoints(seg, seg.arc.straight ? 1 : 24).map(toVec3);
-      const material = new THREE.LineBasicMaterial({ color: seg.tooTight ? COLOR.tight : COLOR.ok });
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), material));
+/**
+ * The centerline, stretch by stretch, as one thin core whose colour changes with the shop kind.
+ * It has to be a tube rather than a line: WebGL ignores line width, so a one-pixel thread next
+ * to a 180 mm duct reads as nothing at all — and a stretch drawn fatter than the rest stops
+ * looking like a marker on the run and starts looking like a second pipe.
+ */
+function addCenterline(group, state, solution, runs) {
+  const core = Math.max(state.ductWidth * 0.06, 8);
+
+  for (const r of runs) {
+    for (const st of r.stretches) {
+      if (st.points.length < 2) continue;
+      const seg = solution.segments[st.segIndex];
+      const color = st.kind === 'elbow' ? COLOR.elbow
+        : st.kind === 'kick' ? COLOR.kick
+          : seg?.tooTight ? COLOR.tight : COLOR.ok;
+
+      const material = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.1 });
+      const geom = new THREE.TubeGeometry(new ShopCurve(st.points), Math.max(8, st.points.length), core, 10, false);
+      group.add(new THREE.Mesh(geom, material));
     }
   }
 
   for (const seg of solution.segments) {
     if (seg.ok || seg.reason === 'degenerate') continue;
     const geom = new THREE.BufferGeometry().setFromPoints([toVec3(seg.from), toVec3(seg.to)]);
-    const line = new THREE.Line(geom, new THREE.LineDashedMaterial({ color: COLOR.error, dashSize: 14, gapSize: 10 }));
+    const line = new THREE.Line(geom, new THREE.LineDashedMaterial({ color: COLOR.error, dashSize: 140, gapSize: 100 }));
     line.computeLineDistances();
     group.add(line);
   }
 }
 
 /**
- * Guide marks: straight ahead, plus four cardinals per cone (plan left/right, elev up/down).
- * A full ring would imply a rolling offset is legal (R-90b).
+ * A flange is a collar plus a plate, not a torus: an open cylinder, a ring and four bolt holes.
+ * The station is treated as a zero-thickness face, so 2D and 3D agree on where it sits.
+ */
+function addFlanges(group, state, runs, pieces) {
+  if (!state.features.flanges || !state.showFlanges) return;
+
+  const outer = Math.max(state.features.duct ? state.ductWidth : 0, state.features.jacket ? state.jacketWidth : 0);
+  const inner = outer / 2;
+  const plate = inner * 1.15;
+  const collar = 22;
+
+  const metal = new THREE.MeshStandardMaterial({ color: COLOR.flange, roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });
+  const up = new THREE.Vector3(0, 1, 0);
+
+  runs.forEach((r, runIndex) => {
+    const stations = new Set([0]);
+    for (const piece of pieces) {
+      if (piece.runIndex !== runIndex) continue;
+      stations.add(piece.start);
+      stations.add(piece.end);
+    }
+
+    for (const s of stations) {
+      const at = stationAt(r.points, s, r.cum);
+      if (!at) continue;
+      const origin = toVec3(at.point);
+      const tangent = toVec3(at.tangent).normalize();
+      const quat = new THREE.Quaternion().setFromUnitVectors(up, tangent);
+
+      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(inner, inner, collar, 24, 1, true), metal);
+      sleeve.quaternion.copy(quat);
+      sleeve.position.copy(origin).addScaledVector(tangent, -collar / 2);
+      group.add(sleeve);
+
+      const ring = new THREE.Mesh(new THREE.RingGeometry(inner, plate, 28), metal);
+      ring.quaternion.copy(quat).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+      ring.position.copy(origin);
+      group.add(ring);
+
+      // Bolt holes are decoration: they say "flange", they carry no geometry.
+      const boltR = Math.max(plate * 0.06, 6);
+      for (let i = 0; i < 4; i++) {
+        const angle = (i * Math.PI) / 2;
+        const bolt = new THREE.Mesh(new THREE.CircleGeometry(boltR, 10), metal);
+        bolt.quaternion.copy(ring.quaternion);
+        const offset = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle))
+          .multiplyScalar((inner + plate) / 2)
+          .applyQuaternion(quat);
+        bolt.position.copy(origin).add(offset).addScaledVector(tangent, 1);
+        group.add(bolt);
+      }
+    }
+  });
+}
+
+/** Invisible tubes, one per piece, so the raycaster can report what the pointer is over. */
+function addPieceHits(group, state, runs, pieces) {
+  const radius = Math.max(state.ductWidth, 120) / 2;
+  const material = new THREE.MeshBasicMaterial({ visible: false });
+
+  for (const piece of pieces) {
+    const r = runs[piece.runIndex];
+    if (!r) continue;
+    const pts = slice(r.points, piece.start, piece.end, r.cum);
+    if (pts.length < 2) continue;
+    const mesh = new THREE.Mesh(new THREE.TubeGeometry(new ShopCurve(pts), 8, radius, 8, false), material);
+    mesh.userData.piece = piece;
+    group.add(mesh);
+  }
+}
+
+/**
+ * Guide marks. A permitted sweep is a whole cone around the tangent, but a full ring reads as
+ * clutter, so only the four cardinal generators are drawn — left, right, up and down in the
+ * tangent's own frame — plus the straight-ahead ray, which has no dead zone at all.
  */
 function addGuides(group, state, solution, anchorIndex) {
   if (!state.features.guideRays || !state.showGuides) return;
@@ -221,31 +293,33 @@ function addGuides(group, state, solution, anchorIndex) {
   const anchor = state.points[anchorIndex];
   const tangent = tangentAt(solution, anchorIndex, state.initialTangent);
   const minRadius = minRadiusFor(state);
+  const reach = Math.max(2600, state.maxPieceLength * 2);
 
-  for (const { theta, half } of legalCones()) {
-    const dMin = minChordFor(theta, minRadius);
-    const dist = Math.max(dMin, defaultAddReach(state, 1600));
-    const blocked = dMin > 0;
+  for (const { theta, dir } of coneGuides(tangent)) {
+    // Nearer than this, a band of the current width cannot make the bend.
+    const blocked = Math.min(minChordFor(theta, minRadius), reach);
 
-    for (const dir of legalDirections(tangent, half)) {
-      const start = V.add(anchor, V.scale(dir, blocked ? dMin : 0));
-      const end = V.add(anchor, V.scale(dir, dist));
-      if (blocked) {
-        group.add(new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints([toVec3(anchor), toVec3(start)]),
-          new THREE.LineBasicMaterial({ color: COLOR.blocked, transparent: true, opacity: 0.55 }),
-        ));
-      }
+    if (blocked > 0) {
       group.add(new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([toVec3(start), toVec3(end)]),
-        new THREE.LineBasicMaterial({ color: COLOR.guide }),
-      ));
+        new THREE.BufferGeometry().setFromPoints([toVec3(anchor), toVec3(V.add(anchor, V.scale(dir, blocked)))]),
+        new THREE.LineDashedMaterial({ color: COLOR.blocked, dashSize: 60, gapSize: 60, transparent: true, opacity: 0.6 }),
+      ).computeLineDistances());
     }
+
+    const from = V.add(anchor, V.scale(dir, blocked));
+    const to = V.add(anchor, V.scale(dir, reach));
+    group.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([toVec3(from), toVec3(to)]),
+      new THREE.LineBasicMaterial({ color: COLOR.guide }),
+    ));
   }
 }
 
+/** Markers are pins, not a second duct: a small node on the core, far under the band diameter. */
 function addPoints(group, state) {
-  const geom = new THREE.SphereGeometry(POINT_SPHERE_R, 18, 12);
+  const radius = Math.max(state.ductWidth * 0.09, 12);
+  const geom = new THREE.SphereGeometry(radius, 16, 12);
+
   for (const p of state.points) {
     const mesh = new THREE.Mesh(geom.clone(), new THREE.MeshBasicMaterial({
       color: p.id === state.selectedId ? COLOR.selected : COLOR.point,
@@ -256,184 +330,76 @@ function addPoints(group, state) {
   geom.dispose();
 }
 
-function flangeMaterial(err) {
-  return new THREE.MeshStandardMaterial({
-    color: err ? COLOR.error : 0xc5d0dc,
-    metalness: 0.4,
-    roughness: 0.35,
-    side: THREE.DoubleSide,
-  });
-}
-
-function addFlange(group, pose, dims, err) {
-  const origin = new THREE.Vector3(pose.x, pose.y, pose.z);
-  const t = toVec3(pose.tangent).normalize();
-  const yQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), t);
-  const zQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), t);
-
-  const collar = new THREE.Mesh(
-    new THREE.CylinderGeometry(dims.innerR, dims.innerR, dims.collarL, 28, 1, true),
-    flangeMaterial(err),
-  );
-  collar.quaternion.copy(yQuat);
-  collar.position.copy(origin);
-  group.add(collar);
-
-  const plate = new THREE.Mesh(
-    new THREE.RingGeometry(dims.innerR, dims.plateR, 36),
-    flangeMaterial(err),
-  );
-  plate.quaternion.copy(zQuat);
-  plate.position.copy(origin);
-  group.add(plate);
-
-  let radial = new THREE.Vector3(0, 0, 1);
-  if (Math.abs(t.dot(radial)) > 0.9) radial = new THREE.Vector3(1, 0, 0);
-  radial.cross(t).normalize();
-  const holeR = dims.plateR * 0.78;
-  for (let i = 0; i < 4; i++) {
-    const dir = radial.clone().applyAxisAngle(t, (i * Math.PI) / 2);
-    const hole = new THREE.Mesh(
-      new THREE.CylinderGeometry(dims.holeR, dims.holeR, dims.plateT + 1, 10),
-      new THREE.MeshBasicMaterial({ color: 0x0d1117 }),
-    );
-    hole.quaternion.copy(yQuat);
-    hole.position.copy(origin.clone().add(dir.multiplyScalar(holeR)));
-    group.add(hole);
-  }
-}
-
-function addFlanges(group, state, solution, spatial) {
-  const options = flangeOptionsFor(state);
-  if (!options) return;
-  const laid = layoutPieces(solution, options);
-  const dims = flangeDrawDims(state);
-  const bad = new Set(laid.errors.flatMap((e) => [e.piece.s0, e.piece.s1].map((s) => s.toFixed(3))));
-  for (const f of laid.flanges) {
-    const pose = poseOnRun(spatial(f.run), f.s, poseAlong);
-    if (!pose) continue;
-    addFlange(group, pose, dims, bad.has(f.s.toFixed(3)));
-  }
-}
-
-function addPieceHits(group, state, solution, spatial) {
-  const options = flangeOptionsFor(state);
-  if (!options) return;
-  const laid = layoutPieces(solution, options);
-  const radius = Math.max(state.ductWidth, state.jacketWidth) / 2 + 8;
-  const material = new THREE.MeshBasicMaterial({
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  for (const piece of laid.pieces) {
-    const run = spatial(piece.run);
-    const n = Math.max(2, Math.ceil(piece.length / 40) + 1);
-    const samples = [];
-    for (let i = 0; i < n; i++) {
-      const s = piece.s0 + (piece.length * i) / (n - 1);
-      const pose = poseOnRun(run, s, poseAlong);
-      if (pose) samples.push(toVec3(pose));
-    }
-    if (samples.length < 2) continue;
-    const curve = new THREE.CatmullRomCurve3(samples, false, 'centripetal');
-    const mesh = new THREE.Mesh(
-      new THREE.TubeGeometry(curve, Math.max(8, n), radius, 8, false),
-      material.clone(),
-    );
-    mesh.userData.piece = { ...piece, run };
-    mesh.name = `piece-hit-${piece.id}`;
-    group.add(mesh);
-  }
-}
-
-function spatialFor(state) {
-  const options = flangeOptionsFor(state);
-  const cache = new Map();
-  return (run) => {
-    if (!run) return run;
-    if (!cache.has(run)) cache.set(run, expandRun(run, options));
-    return cache.get(run);
-  };
-}
-
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
-
-export function pickPieceFromEvent(ctx, event) {
-  if (!ctx?.camera || !ctx?.container) return null;
-  const rect = ctx.container.getBoundingClientRect();
-  if (!(rect.width > 0) || !(rect.height > 0)) return null;
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, ctx.camera);
-  const objects = ['duct', 'jacket', 'hits']
-    .flatMap((name) => ctx.groups[name]?.children ?? []);
-  const hits = raycaster.intersectObjects(objects, true);
-  if (!hits.length) return null;
-  if (hits[0].object.userData.piece) return hits[0].object.userData.piece;
-  const p = hits[0].point;
-  return pickPieceAt3d(ctx.hoverPieces ?? [], { x: p.x, y: p.y, z: p.z }, poseAlong, 600);
-}
-
 export function renderScene(ctx, state, solution, anchorIndex) {
   const { groups } = ctx;
   for (const g of Object.values(groups)) clearGroup(g);
 
-  const options = flangeOptionsFor(state);
-  const solverRuns = validRuns(solution);
-  const spatial = spatialFor(state);
-  const runs = solverRuns.map((run) => spatial(run));
+  const runs = validRuns(solution).map((run) => {
+    const { points, stretches } = expandRun(run);
+    return { run, points, stretches, cum: cumulative(points) };
+  });
+  const { pieces } = layoutPieces(solution, shopOptions(state));
 
-  if (state.features.jacket && state.showJacket) addBand(groups.jacket, runs, state.jacketWidth, COLOR.jacket, 0.18, 1);
-  if (state.features.duct && state.showDuct) addBand(groups.duct, runs, state.ductWidth, COLOR.duct, 0.34, 2);
+  if (state.features.jacket && state.showJacket) addBand(groups.jacket, runs, state.jacketWidth, COLOR.jacket, 0.18);
+  if (state.features.duct && state.showDuct) addBand(groups.duct, runs, state.ductWidth, COLOR.duct, 0.34);
 
-  addCenterline(groups.path, solution, runs, true);
-  addFlanges(groups.flanges, state, solution, spatial);
-  addPieceHits(groups.hits, state, solution, spatial);
+  addFlanges(groups.flanges, state, runs, pieces);
+  addCenterline(groups.path, state, solution, runs);
   addGuides(groups.guides, state, solution, anchorIndex);
   addPoints(groups.points, state);
+  addPieceHits(groups.pieces, state, runs, pieces);
 
-  ctx.hoverPieces = options
-    ? layoutPieces(solution, options).pieces.map((p) => ({ ...p, run: spatial(p.run) }))
-    : [];
+  return pieces;
 }
 
+/** What the pointer is over, as a one-line shop read. Returns null over empty space. */
+export function pickPiece(ctx, clientX, clientY) {
+  const rect = ctx.renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  ctx.raycaster.setFromCamera(ndc, ctx.camera);
+
+  const [hit] = ctx.raycaster.intersectObjects(ctx.groups.pieces.children, false);
+  if (!hit) return null;
+
+  const piece = hit.object.userData.piece;
+  return { piece, label: pieceLabel(piece), text: `${piece.kind} · ${mm(piece.length)} flange to flange · ${piece.arcDeg.toFixed(1)}°` };
+}
+
+/** Fit frames the path *and* the origin, so the datum never drops out of view. */
 export function fitCamera(ctx, points) {
-  const box = new THREE.Box3();
-  box.expandByPoint(new THREE.Vector3(0, 0, 0)); // origin stays in frame as the spatial reference (R-137)
-  if (points.length === 0) box.expandByPoint(new THREE.Vector3(2400, 2400, 800));
-  else for (const p of points) box.expandByPoint(toVec3(p));
+  const { min, max } = boundsWithOrigin(points);
+  const box = new THREE.Box3(new THREE.Vector3(min.x, min.y, min.z), new THREE.Vector3(max.x, max.y, max.z));
 
   const sphere = box.getBoundingSphere(new THREE.Sphere());
-  const radius = Math.max(sphere.radius, 400);
-  const dist = radius / Math.sin((ctx.camera.fov * Math.PI) / 360) * 1.75;
+  const radius = Math.max(sphere.radius, AXIS_LENGTH);
+  const dist = (radius / Math.sin((ctx.camera.fov * Math.PI) / 360)) * 1.35;
 
   const dir = ctx.camera.position.clone().sub(ctx.controls.target).normalize();
   if (dir.lengthSq() === 0) dir.set(0.5, -0.7, 0.5).normalize();
 
   ctx.controls.target.copy(sphere.center);
   ctx.camera.position.copy(sphere.center.clone().add(dir.multiplyScalar(dist)));
-  ctx.camera.near = Math.max(0.5, dist / 500);
+  ctx.camera.near = Math.max(1, dist / 500);
   ctx.camera.far = dist * 12;
   ctx.camera.updateProjectionMatrix();
   ctx.controls.update();
 }
 
-/** Pan onto one table point. Keep the approach; pull back if the camera is too close (R-154). */
-export function focusPoint(ctx, point) {
-  if (!ctx || !point) return;
-  const next = focusCameraOnPoint(
-    ctx.camera.position,
-    ctx.controls.target,
-    point,
-    MIN_FOCUS_STANDOFF,
-  );
-  ctx.controls.target.set(next.target.x, next.target.y, next.target.z);
-  ctx.camera.position.set(next.camera.x, next.camera.y, next.camera.z);
-  ctx.camera.near = Math.max(0.5, next.standoff / 500);
-  ctx.camera.far = Math.max(ctx.camera.far, next.standoff * 12);
+/** Selecting a row pans onto the point, keeps the approach, and never closes in past the standoff. */
+export function focusOn(ctx, point) {
+  const eye = focusEye(ctx.camera.position, ctx.controls.target, point, FOCUS_STANDOFF);
+  ctx.controls.target.set(point.x, point.y, point.z ?? 0);
+  ctx.camera.position.set(eye.x, eye.y, eye.z);
   ctx.camera.updateProjectionMatrix();
   ctx.controls.update();
+}
+
+/** A default orbit that always includes the origin. */
+export function resetView(ctx, points) {
+  ctx.camera.position.set(1, -1.4, 1).multiplyScalar(FOCUS_STANDOFF);
+  ctx.controls.target.set(0, 0, 0);
+  fitCamera(ctx, points);
 }

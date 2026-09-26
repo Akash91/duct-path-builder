@@ -11,96 +11,81 @@
 <aside class="panel">
   <header class="panel-head">
     <h1>Arc Path Builder</h1>
-      <p class="hint">Every connection is one arc of 0° (straight), 30°, 45°, 60° or 90°, departing along the previous arc's tangent. Coordinates are millimetres. A long shop curve is not cut as one piece: leftover length becomes straight ducts and a compact elbow. Hover a piece for its length and bend.</p>
+    <p class="hint">Every connection is one arc of 0° (straight), 30°, 45°, 60° or 90°, departing along the previous arc's tangent. Coordinates are millimetres. A shop elbow is a 60 mm lead, an amber circular arc, then a 60 mm trail — hover a piece for its length and bend.</p>
   </header>
 
-  <section class="controls">
-    <details class="acc">
-    <summary class="acc-head">
-      <span class="acc-chev" aria-hidden="true">▸</span>
-      <span>Settings</span>
-      <span class="acc-digest" id="accDigest"></span>
-    </summary>
-    <div class="acc-body">
-    <label class="ctl">
-      <span>Initial heading <em id="v-heading">0°</em></span>
-      <input id="initialHeading" type="range" min="-180" max="180" step="1" value="0" />
-    </label>
+  <details class="accordion" id="settings">
+    <summary>Settings</summary>
+    <section class="controls">
+      <label class="ctl">
+        <span>Initial heading <em id="v-heading">0°</em></span>
+        <input id="initialHeading" type="range" min="-180" max="180" step="1" value="0" />
+      </label>
 
-    <label class="ctl">
-      <span>Angular tolerance <em id="v-tol">2°</em></span>
-      <input id="tolerance" type="range" min="0" max="15" step="0.5" value="2" />
-      <p class="ctl-note">How far a point may sit off an exact guide ray and still be accepted. At 0° only perfect placements count; higher values forgive near-misses. Nothing moves — the slack is absorbed as a small kink at the joint.</p>
-    </label>
+      <label class="ctl">
+        <span>Angular tolerance <em id="v-tol">2°</em></span>
+        <input id="tolerance" type="range" min="0" max="15" step="0.5" value="2" />
+        <p class="ctl-note">How far a point may sit off an exact guide ray and still be accepted. Nothing moves — the slack is absorbed as a small kink at the joint.</p>
+      </label>
 
-    <label class="ctl" data-feature="duct">
-      <span>Duct width <em id="v-duct">180 mm</em></span>
-      <input id="ductWidth" type="range" min="20" max="1200" step="10" value="180" />
-    </label>
+      <label class="ctl" data-feature="duct">
+        <span>Duct width <em id="v-duct">180 mm</em></span>
+        <input id="ductWidth" type="range" min="20" max="1200" step="10" value="180" />
+      </label>
 
-    <label class="ctl" data-feature="jacket">
-      <span>Jacket diameter <em id="v-jacket">400 mm</em></span>
-      <input id="jacketWidth" type="range" min="20" max="2000" step="10" value="400" />
-      <p class="ctl-note" id="jacketNote"></p>
-    </label>
+      <label class="ctl" data-feature="jacket">
+        <span>Jacket diameter <em id="v-jacket">400 mm</em></span>
+        <input id="jacketWidth" type="range" min="20" max="2000" step="10" value="400" />
+        <p class="ctl-note" id="jacketNote"></p>
+      </label>
 
-    <label class="ctl" data-feature="minBendRadius">
-      <span>Min bend radius <em id="v-ratio">1.5 × D</em></span>
-      <input id="minRadiusRatio" type="range" min="0.5" max="4" step="0.1" value="1.5" />
-      <p class="ctl-note" id="ratioNote"></p>
-    </label>
+      <label class="ctl" data-feature="minBendRadius">
+        <span>Min bend radius <em id="v-ratio">1.5 × D</em></span>
+        <input id="minRadiusRatio" type="range" min="0.5" max="4" step="0.1" value="1.5" />
+        <p class="ctl-note" id="ratioNote"></p>
+      </label>
 
-    <label class="ctl" data-feature="flanges">
-      <span>Max piece length <em id="v-piece">1050 mm</em></span>
-      <input id="maxPieceLengthMm" type="range" min="300" max="2000" step="10" value="1050" />
-      <p class="ctl-note">Straights and leftover length from a compacted curve are split automatically so none exceeds this.</p>
-    </label>
+      <label class="ctl">
+        <span>Max piece length <em id="v-piece">1050 mm</em></span>
+        <input id="maxPieceLength" type="range" min="300" max="3000" step="50" value="1050" />
+      </label>
 
-    <label class="ctl" data-feature="flanges">
-      <span>Elbow flange offset <em id="v-flange">60 mm</em></span>
-      <input id="flangeBendOffsetMm" type="range" min="20" max="200" step="5" value="60" />
-      <p class="ctl-note">Each bend is its own piece: flange, this stub, the arc, the same stub, flange.</p>
-    </label>
-    </div>
-    </details>
+      <label class="ctl" data-feature="flanges">
+        <span>Elbow flange offset <em id="v-offset">60 mm</em></span>
+        <input id="elbowFlangeOffset" type="range" min="20" max="300" step="5" value="60" />
+      </label>
+    </section>
+  </details>
 
-    <div class="toggles">
-      <label data-feature="duct"><input id="showDuct" type="checkbox" checked /> Duct</label>
-      <label data-feature="jacket"><input id="showJacket" type="checkbox" checked /> Jacket</label>
-      <label data-feature="guideRays"><input id="showGuides" type="checkbox" checked /> Guide rays</label>
-      <label data-feature="snapping"><input id="snapEnabled" type="checkbox" checked /> Snap</label>
-    </div>
-  </section>
+  <div class="toggles">
+    <label data-feature="duct"><input id="showDuct" type="checkbox" /> Duct</label>
+    <label data-feature="jacket"><input id="showJacket" type="checkbox" /> Jacket</label>
+    <label data-feature="flanges"><input id="showFlanges" type="checkbox" /> Flanges</label>
+    <label data-feature="guideRays"><input id="showGuides" type="checkbox" checked /> Guide rays</label>
+    <label data-feature="snapping"><input id="snapEnabled" type="checkbox" checked /> Snap</label>
+  </div>
 
   <p id="notice" class="notice" hidden></p>
   <p id="summary" class="summary"></p>
 
   <div class="panel-scroll">
-  <section class="piece-panel" data-feature="flanges">
-    <details class="acc">
-    <summary class="acc-head">
-      <span class="acc-chev" aria-hidden="true">▸</span>
-      <span>Duct pieces</span>
-      <span class="acc-digest" id="pieceDigest"></span>
-    </summary>
-    <div class="acc-body">
-      <label class="ctl">
-        <span>Piece</span>
-        <select id="pieceSelect"></select>
-      </label>
-      <div id="pieceDetail" class="piece-detail"></div>
-    </div>
+    <details class="accordion" id="piecesPanel" open>
+      <summary>Duct pieces</summary>
+      <div class="pieces">
+        <select id="pieceSelect" class="piece-select" aria-label="Derived duct pieces"></select>
+        <p class="ctl-note" id="pieceDetail"></p>
+        <button id="btnSplit" class="mini" title="Split the selected straight into two shorter pieces">Split straight</button>
+      </div>
     </details>
-  </section>
 
-  <section class="table-wrap">
-    <table class="pts">
-      <thead>
-        <tr><th>#</th><th>x (mm)</th><th>y (mm)</th><th>Arc in</th><th></th></tr>
-      </thead>
-      <tbody id="ptBody"></tbody>
-    </table>
-  </section>
+    <section class="table-wrap">
+      <table class="pts">
+        <thead>
+          <tr><th>#</th><th>x (mm)</th><th>y (mm)</th><th>Arc in</th><th></th></tr>
+        </thead>
+        <tbody id="ptBody"></tbody>
+      </table>
+    </section>
   </div>
 
   <footer class="panel-foot">
@@ -117,22 +102,21 @@
 <main class="stage">
   <svg id="canvas" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet">
     <defs>
-      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1d2530" stroke-width="1" />
+      <pattern id="grid" width="200" height="200" patternUnits="userSpaceOnUse">
+        <path d="M 200 0 L 0 0 0 200" fill="none" stroke="#1d2530" stroke-width="2" />
       </pattern>
     </defs>
-    <rect x="-20000" y="-20000" width="40000" height="40000" fill="url(#grid)" />
+    <rect x="-400000" y="-400000" width="800000" height="800000" fill="url(#grid)" />
     <g id="layer-guides"></g>
     <g id="layer-jacket"></g>
     <g id="layer-duct"></g>
-    <g id="layer-path"></g>
     <g id="layer-flanges"></g>
-    <g id="layer-hover"></g>
+    <g id="layer-path"></g>
     <g id="layer-markers"></g>
     <g id="layer-points"></g>
+    <g id="layer-pieces"></g>
   </svg>
-  <div id="pieceTip" class="piece-tip" hidden></div>
-  <p class="stage-hint">Drag to pan · scroll to zoom · drag a point to move it · hover a duct piece for length and bend</p>
+  <p class="stage-hint">Drag to pan · scroll to zoom · drag a point to move it · all lengths in mm</p>
 </main>
 
 <script type="module" src="src/2d/main.js"></script>

@@ -1,16 +1,16 @@
 # Arc Path Builder
 
 Two builders, **2D** ([index.html](index.html)) and **3D** ([index3d.html](index3d.html)), sharing
-one geometry core. The 3D view is enabled via `features.threeD` in [config.json](config.json); set
-it to `false` to drop back to 2D only.
+one geometry core. Work is in **millimetres** throughout.
 
 Enter an ordered list of points; the app connects each consecutive pair with a **single circular
 arc** whose swept angle is exactly **0°, 30°, 45°, 60° or 90°** (configurable), with each arc
-departing along the previous arc's exit tangent. Coordinates are **millimetres**. A 0° sweep is a
-straight run. Connections that cannot satisfy that are flagged instead of being drawn wrong.
+departing along the previous arc's exit tangent. A 0° sweep is a straight run. Connections that
+cannot satisfy that are flagged instead of being drawn wrong.
 
-Two table points are a centerline span, not one manufactured part. A straight longer than **1050 mm**
-is auto-spliced, and each bend is its own elbow with a flange **60 mm** before and after the arc.
+The path is then cut into **derived shop pieces**, flange to flange — straights spliced at the
+maximum piece length, compact elbows, and angled straights. Table points are centerline waypoints,
+not parts.
 
 Full spec: [docs/requirements.md](docs/requirements.md).
 
@@ -58,10 +58,16 @@ Each ray therefore has a dead zone near its origin — drawn as an amber stub �
 must lie on the ray *and* beyond it. Sharper sweeps have longer dead zones; the straight ray has
 none, since `r = ∞`.
 
-**In 3D a pipe turns in one plane.** Each half-angle still describes a cone around the tangent,
-but a physical elbow only uses the **plan** (Y) or **elevation** (Z) generators of that cone — not
-a rolling offset that changes Y and Z at once. The 2D rays are the plan cuts of those cones. To
-offset in both Y and Z, add an intermediate point.
+**In 3D the rays become cones.** The tangent is a vector, so the arc can bend in any plane
+containing it, and each half-angle sweeps out a cone rather than a pair of rays. The 2D rays are
+these cones cut by the working plane.
+
+But a cone angle is not on its own enough, because **a shop elbow is planar**: it yaws in plan or
+pitches in elevation, never both at once. A span that has to move both laterally and vertically is
+routed as an **angled straight** — run on for at least 100 mm, take a slight kick toward the point,
+then a straight — falling back to two compact 90° cardinals, and only then failing as a compound
+bend. And a horizontal duct is never laid dead level: a straight flatter than the drain floor is
+`off-slope`, though it may fall or rise.
 
 ## Configuration
 
@@ -73,10 +79,12 @@ rebuild.
   "sweeps": [0, 30, 45, 60, 90],
   "features": { "duct": true, "jacket": true, "minBendRadius": true,
                 "guideRays": true, "snapping": true, "importExport": true,
-                "crossLink": true, "threeD": true, "flanges": true, "autosave": true },
+                "crossLink": true, "threeD": true, "flanges": true,
+                "drainSlope": true, "autosave": true },
   "defaults": { "initialHeading": 0, "toleranceDeg": 2,
                 "ductWidth": 180, "jacketWidth": 400, "minRadiusRatio": 1.5,
-                "maxPieceLengthMm": 1050, "flangeBendOffsetMm": 60 }
+                "maxPieceLength": 1050, "elbowFlangeOffset": 60,
+                "angledMinLead": 100, "slopeDeg": 3, "slopeToleranceDeg": 1 }
 }
 ```
 
@@ -104,10 +112,10 @@ server-side.
 | Path | Role |
 |------|------|
 | `config.json` | Sweep set, feature flags and seed values — shared by both apps. |
-| `src/core/` | Dimension-free: `angles`, `arcMath`, `solve`, `config`, `store`, `flange`, `view`, `piecePanel`. Never imports from `2d/` or `3d/`. |
+| `src/core/` | Dimension-free: `angles`, `arcMath`, `solve`, `config`, `store`, `slope`, `routing`, `pieces`, `polyline`, `piecePanel`, `view`. Never imports from `2d/` or `3d/`. |
 | `src/2d/` | Bearings and rays, rendered to SVG. |
 | `src/3d/` | Tangent vectors and cones, rendered with Three.js. |
-| `tests/` | `core`, `geometry2d`, `geometry3d`, `flange`, `invariants`. |
+| `tests/` | `core`, `geometry2d`, `geometry3d`, `slope`, `pieces`, `shop3d`, `invariants`. |
 
 `walkPath` in core treats the tangent as opaque, so 2D passes a bearing in degrees and 3D a unit
 vector through the very same loop.
@@ -123,6 +131,10 @@ vector through the very same loop.
 - `y` increases **downward** (SVG convention), so positive angles turn clockwise on screen.
 - A 0° sweep renders with `L` rather than `A`, and carries the tangent through unchanged.
 - Errors do not cascade: after a violation the tangent resets to that segment's straight chord.
-- Coordinates, diameters and piece lengths are **millimetres**.
-- The duct is a stroke only — width maps to `stroke-width`. Wall thickness is out of scope.
-- Points store a `z` field; the 2D app leaves it at `0`.
+- `too-tight` is legal but unbendable: the real arc is still drawn, in the warning colour, and the
+  run is not broken.
+- The duct is a stroke or a tube only — width maps to `stroke-width` or tube diameter. Wall
+  thickness is out of scope.
+- The drawn centerline is the *shop* centerline: real chords and real arcs, walked by arc length.
+  No spline is fitted through the samples.
+- All lengths and diameters are millimetres.

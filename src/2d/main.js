@@ -1,16 +1,14 @@
 import { DEG, legalBearings, snapToLegal, solvePath } from './geometry.js';
 import { setSweeps } from '../core/angles.js';
-import { tangentAt, minRadiusFor } from '../core/solve.js';
-import { defaultAddReach, layoutPieces, flangeOptionsFor, describePiece, placePieceTip } from '../core/flange.js';
-import { renderPiecePanel, bindPiecePanel } from '../core/piecePanel.js';
-import { centerViewOnPoint } from '../core/view.js';
-import { renderCanvas, renderTable, renderSummary, hitPiece, highlightHoveredPiece } from './render.js';
+import { tangentAt, minRadiusFor, shopOptions } from '../core/solve.js';
+import { pieceKey } from '../core/pieces.js';
+import { renderPieces } from '../core/piecePanel.js';
+import { renderCanvas, renderTable, renderSummary } from './render.js';
 import { loadConfig, applyFeatureFlags } from '../core/config.js';
 import { sendPath, takePath } from '../core/handoff.js';
 import {
   getState, subscribe, update, restore, configure,
   addPoint, movePoint, removePoint, reorderPoint, clearPoints,
-  selectPiece, setPieceOverride, splitPiece,
   toJSON, fromJSON,
 } from '../core/store.js';
 
@@ -21,20 +19,18 @@ const layers = {
   guides: $('layer-guides'),
   jacket: $('layer-jacket'),
   duct: $('layer-duct'),
-  path: $('layer-path'),
   flanges: $('layer-flanges'),
-  hover: $('layer-hover'),
+  path: $('layer-path'),
   markers: $('layer-markers'),
   points: $('layer-points'),
+  pieces: $('layer-pieces'),
 };
-const pieceTip = $('pieceTip');
 const ptBody = $('ptBody');
 const summaryEl = $('summary');
-const pieceSelect = $('pieceSelect');
-const pieceDetail = $('pieceDetail');
-const pieceDigest = $('pieceDigest');
+const pieceEls = { select: $('pieceSelect'), detail: $('pieceDetail'), split: $('btnSplit') };
 
 let solution = { segments: [], tangentOut: 0, errorCount: 0 };
+let pieces = [];
 let drag = null;
 
 // ---------------------------------------------------------------- coordinates
@@ -62,23 +58,24 @@ function syncControls(state) {
   $('ductWidth').value = state.ductWidth;
   $('jacketWidth').value = state.jacketWidth;
   $('minRadiusRatio').value = state.minRadiusRatio;
-  if ($('maxPieceLengthMm')) $('maxPieceLengthMm').value = state.maxPieceLengthMm;
-  if ($('flangeBendOffsetMm')) $('flangeBendOffsetMm').value = state.flangeBendOffsetMm;
+  $('maxPieceLength').value = state.maxPieceLength;
+  $('elbowFlangeOffset').value = state.elbowFlangeOffset;
   $('showDuct').checked = state.showDuct;
   $('showJacket').checked = state.showJacket;
+  $('showFlanges').checked = state.showFlanges;
   $('showGuides').checked = state.showGuides;
   $('snapEnabled').checked = state.snapEnabled;
-  $('v-heading').textContent = `${state.initialHeading}°`;
-  $('v-tol').textContent = `±${state.toleranceDeg}°`;
+  $('v-heading').textContent = `${state.initialHeading}\u00b0`;
+  $('v-tol').textContent = `\u00b1${state.toleranceDeg}\u00b0`;
   $('v-duct').textContent = `${state.ductWidth} mm`;
   $('v-jacket').textContent = `${state.jacketWidth} mm`;
-  $('v-ratio').textContent = `${state.minRadiusRatio.toFixed(1)} × D`;
-  if ($('v-piece')) $('v-piece').textContent = `${state.maxPieceLengthMm} mm`;
-  if ($('v-flange')) $('v-flange').textContent = `${state.flangeBendOffsetMm} mm`;
+  $('v-ratio').textContent = `${state.minRadiusRatio.toFixed(1)} \u00d7 D`;
+  $('v-piece').textContent = `${state.maxPieceLength} mm`;
+  $('v-offset').textContent = `${state.elbowFlangeOffset} mm`;
 
   const minR = minRadiusFor(state);
   $('ratioNote').textContent = state.minRadiusRatio < 1
-    ? `Minimum centerline radius ${minR.toFixed(0)} mm. Below 0.5 × D the inner edge folds back on itself.`
+    ? `Minimum centerline radius ${minR.toFixed(0)} mm. Below 0.5 \u00d7 D the inner edge folds back on itself.`
     : `Minimum centerline radius ${minR.toFixed(0)} mm, measured against the widest band.`;
   $('ratioNote').classList.toggle('ctl-note--warn', state.minRadiusRatio < 1);
 
@@ -86,35 +83,23 @@ function syncControls(state) {
   const swallowed = state.jacketWidth <= state.ductWidth;
   $('jacketNote').textContent = swallowed
     ? 'Jacket is not wider than the duct, so it is hidden behind it.'
-    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(0)} mm of cover around the duct.`;
+    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} mm of cover around the duct.`;
   $('jacketNote').classList.toggle('ctl-note--warn', swallowed);
-
-  // Keeps the collapsed accordion honest about what it is hiding.
-  $('accDigest').textContent = [
-    state.features.duct ? `duct ${state.ductWidth} mm` : null,
-    state.features.jacket ? `jacket ${state.jacketWidth} mm` : null,
-    state.features.flanges ? `piece ${state.maxPieceLengthMm} mm` : null,
-    `±${state.toleranceDeg}°`,
-  ].filter(Boolean).join(' · ');
-}
-
-function currentPieces(state) {
-  return layoutPieces(solution, flangeOptionsFor(state)).pieces;
 }
 
 function render() {
   const state = getState();
-  solution = solvePath(state.points, state.initialHeading, state.toleranceDeg, minRadiusFor(state));
-  renderCanvas(layers, state, solution, anchorIndex(state));
+  solution = solvePath(state.points, state.initialHeading, shopOptions(state));
+  pieces = renderCanvas(layers, state, solution, anchorIndex(state));
+  renderPieces(pieceEls, pieces, state.selectedPieceIndex);
   renderTable(ptBody, state, solution);
   renderSummary(summaryEl, solution, state);
-  renderPiecePanel(pieceSelect, pieceDetail, pieceDigest, state, currentPieces(state));
   syncControls(state);
 }
 
 // ---------------------------------------------------------------- viewport
 
-const BASE = { w: 1200, h: 800 };
+const BASE = { w: 6000, h: 4000 };
 const MIN_W = 400;
 const MAX_W = 80000;
 
@@ -146,7 +131,7 @@ function fitView() {
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
 
-  const pad = Math.max(90, Math.max(maxX - minX, maxY - minY) * 0.12);
+  const pad = Math.max(600, Math.max(maxX - minX, maxY - minY) * 0.12);
   const aspect = BASE.w / BASE.h;
 
   let w = Math.max(maxX - minX + pad * 2, MIN_W);
@@ -165,7 +150,6 @@ applyView();
 // ---------------------------------------------------------------- canvas input
 
 svg.addEventListener('pointerdown', (e) => {
-  hidePieceTip();
   const state = getState();
   const hit = e.target.closest('.pt');
 
@@ -178,15 +162,16 @@ svg.addEventListener('pointerdown', (e) => {
     return;
   }
 
+  const piece = e.target.closest('[data-piece]');
+  if (piece) {
+    update({ selectedPieceIndex: Number(piece.dataset.piece) });
+    return;
+  }
+
   pan = { clientX: e.clientX, clientY: e.clientY, view: { ...view } };
   svg.setPointerCapture(e.pointerId);
   svg.classList.add('panning');
 });
-
-function hidePieceTip() {
-  highlightHoveredPiece(layers.hover, null);
-  placePieceTip(pieceTip, null);
-}
 
 svg.addEventListener('pointermove', (e) => {
   if (pan) {
@@ -194,22 +179,10 @@ svg.addEventListener('pointermove', (e) => {
     view.x = pan.view.x - (e.clientX - pan.clientX) * k;
     view.y = pan.view.y - (e.clientY - pan.clientY) * k;
     applyView();
-    hidePieceTip();
     return;
   }
 
-  if (!drag) {
-    const state = getState();
-    if (!state.features.flanges || e.target.closest('.pt')) {
-      hidePieceTip();
-      return;
-    }
-    const piece = hitPiece(state, solution, toSvgCoords(e));
-    highlightHoveredPiece(layers.hover, piece);
-    placePieceTip(pieceTip, piece ? describePiece(piece, state) : null, e.clientX, e.clientY);
-    return;
-  }
-
+  if (!drag) return;
   drag.moved = true;
 
   const state = getState();
@@ -257,9 +230,8 @@ function endDrag(e) {
 
 svg.addEventListener('pointerup', endDrag);
 svg.addEventListener('pointercancel', endDrag);
-svg.addEventListener('pointerleave', hidePieceTip);
 
-const round = (v) => Math.round(v);
+const round = (v) => Math.round(v * 10) / 10;
 
 // ---------------------------------------------------------------- table input
 
@@ -285,14 +257,12 @@ ptBody.addEventListener('click', (e) => {
     else if (act === 'fix') autoFix(id);
     return;
   }
+  // Clicking into a coordinate field is an edit. Selecting would re-render and replace the
+  // input mid-click, which is how the caret used to get thrown away.
+  if (e.target.closest('input')) return;
+
   const row = e.target.closest('tr[data-id]');
-  if (!row || e.target.closest('input.num')) return;
-  if (row.dataset.id !== getState().selectedId) update({ selectedId: row.dataset.id });
-  const p = getState().points.find((q) => q.id === row.dataset.id);
-  if (p) {
-    view = centerViewOnPoint(view, p);
-    applyView();
-  }
+  if (row) update({ selectedId: row.dataset.id });
 });
 
 /** R-22: slide the point onto the nearest legal ray, out to the minimum bend distance if needed. */
@@ -317,14 +287,23 @@ $('tolerance').addEventListener('input', (e) => update({ toleranceDeg: Number(e.
 $('ductWidth').addEventListener('input', (e) => update({ ductWidth: Number(e.target.value) }));
 $('jacketWidth').addEventListener('input', (e) => update({ jacketWidth: Number(e.target.value) }));
 $('minRadiusRatio').addEventListener('input', (e) => update({ minRadiusRatio: Number(e.target.value) }));
-$('maxPieceLengthMm')?.addEventListener('input', (e) => update({ maxPieceLengthMm: Number(e.target.value) }));
-$('flangeBendOffsetMm')?.addEventListener('input', (e) => update({ flangeBendOffsetMm: Number(e.target.value) }));
+$('maxPieceLength').addEventListener('input', (e) => update({ maxPieceLength: Number(e.target.value) }));
+$('elbowFlangeOffset').addEventListener('input', (e) => update({ elbowFlangeOffset: Number(e.target.value) }));
 $('showDuct').addEventListener('change', (e) => update({ showDuct: e.target.checked }));
 $('showJacket').addEventListener('change', (e) => update({ showJacket: e.target.checked }));
+$('showFlanges').addEventListener('change', (e) => update({ showFlanges: e.target.checked }));
 $('showGuides').addEventListener('change', (e) => update({ showGuides: e.target.checked }));
 $('snapEnabled').addEventListener('change', (e) => update({ snapEnabled: e.target.checked }));
 
-bindPiecePanel(pieceSelect, pieceDetail, { selectPiece, setPieceOverride, splitPiece });
+$('pieceSelect').addEventListener('change', (e) => update({ selectedPieceIndex: Number(e.target.value) }));
+
+/** Cutting a leftover straight is a shop choice, so it never touches the point table. */
+$('btnSplit').addEventListener('click', () => {
+  const piece = pieces[getState().selectedPieceIndex];
+  if (!piece || piece.kind !== 'straight') return;
+  const key = pieceKey(piece);
+  update((s) => ({ extraSplits: { ...s.extraSplits, [key]: (s.extraSplits[key] ?? 0) + 1 } }));
+});
 
 /** Places the new point on a legal ray so it starts out valid. */
 $('btnAdd').addEventListener('click', () => {
@@ -338,7 +317,7 @@ $('btnAdd').addEventListener('click', () => {
   const tau = tangentAt(solution, state.points.length - 1, state.initialHeading);
   // Extend straight ahead (the 0 sweep), so a plain "add" never introduces a turn.
   const { bearing } = legalBearings(tau).find((c) => c.theta === 0);
-  const reach = defaultAddReach(state, 2200);
+  const reach = Math.max(1200, state.maxPieceLength);
   const added = { x: round(last.x + reach * Math.cos(bearing * DEG)), y: round(last.y + reach * Math.sin(bearing * DEG)) };
 
   addPoint(added.x, added.y);

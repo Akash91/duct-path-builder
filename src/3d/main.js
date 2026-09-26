@@ -1,20 +1,18 @@
-import { legalCones, snapToLegal, solvePath } from './geometry.js';
-import { initScene, renderScene, fitCamera, focusPoint, pickPieceFromEvent } from './render.js';
+import { snapToLegal, solvePath } from './geometry.js';
+import { initScene, renderScene, fitCamera, focusOn, resetView, pickPiece } from './render.js';
 import { renderTable, renderSummary } from './panel.js';
 import * as V from './vec3.js';
 
 import { setSweeps } from '../core/angles.js';
-import { minChordFor } from '../core/arcMath.js';
-import { tangentAt, minRadiusFor } from '../core/solve.js';
-import { defaultAddReach, layoutPieces, flangeOptionsFor, describePiece, placePieceTip } from '../core/flange.js';
-import { slopeOptionsFor } from '../core/slope.js';
-import { renderPiecePanel, bindPiecePanel } from '../core/piecePanel.js';
+import { tangentAt, minRadiusFor, shopOptions } from '../core/solve.js';
+import { pieceKey } from '../core/pieces.js';
+import { renderPieces } from '../core/piecePanel.js';
+import { pitchedRise } from '../core/slope.js';
 import { loadConfig, applyFeatureFlags } from '../core/config.js';
 import { sendPath, takePath } from '../core/handoff.js';
 import {
   getState, subscribe, update, restore, configure,
   addPoint, movePoint, removePoint, reorderPoint, clearPoints,
-  selectPiece, setPieceOverride, splitPiece,
   toJSON, fromJSON,
 } from '../core/store.js';
 
@@ -24,21 +22,16 @@ const $ = (id) => document.getElementById(id);
 let ctx = null;
 const ptBody = $('ptBody');
 const summaryEl = $('summary');
-const pieceSelect = $('pieceSelect');
-const pieceDetail = $('pieceDetail');
-const pieceDigest = $('pieceDigest');
-const pieceTip = $('pieceTip');
+const tooltip = $('tooltip');
+const pieceEls = { select: $('pieceSelect'), detail: $('pieceDetail'), split: $('btnSplit') };
 
 let solution = { segments: [], tangentOut: null, errorCount: 0, tightCount: 0 };
+let pieces = [];
 
 /** State plus the derived unit tangent, which the renderer and solver both need. */
 function viewState() {
   const state = getState();
   return { ...state, initialTangent: V.fromAngles(state.initialHeading, state.initialElevation) };
-}
-
-function classifyOpts(state) {
-  return { ...(slopeOptionsFor(state) ?? {}), ...(flangeOptionsFor(state) ?? {}) };
 }
 
 function anchorIndex(state) {
@@ -53,62 +46,50 @@ function syncControls(state) {
   $('ductWidth').value = state.ductWidth;
   $('jacketWidth').value = state.jacketWidth;
   $('minRadiusRatio').value = state.minRadiusRatio;
-  if ($('maxPieceLengthMm')) $('maxPieceLengthMm').value = state.maxPieceLengthMm;
-  if ($('flangeBendOffsetMm')) $('flangeBendOffsetMm').value = state.flangeBendOffsetMm;
-  if ($('slopeDeg')) $('slopeDeg').value = state.slopeDeg ?? 3;
+  $('maxPieceLength').value = state.maxPieceLength;
+  $('elbowFlangeOffset').value = state.elbowFlangeOffset;
+  $('slopeDeg').value = state.slopeDeg;
   $('showDuct').checked = state.showDuct;
   $('showJacket').checked = state.showJacket;
+  $('showFlanges').checked = state.showFlanges;
   $('showGuides').checked = state.showGuides;
   $('snapEnabled').checked = state.snapEnabled;
 
-  $('v-heading').textContent = `${state.initialHeading}°`;
-  $('v-elevation').textContent = `${state.initialElevation}°`;
-  $('v-tol').textContent = `±${state.toleranceDeg}°`;
+  $('v-heading').textContent = `${state.initialHeading}\u00b0`;
+  $('v-elevation').textContent = `${state.initialElevation}\u00b0`;
+  $('v-tol').textContent = `\u00b1${state.toleranceDeg}\u00b0`;
   $('v-duct').textContent = `${state.ductWidth} mm`;
   $('v-jacket').textContent = `${state.jacketWidth} mm`;
-  $('v-ratio').textContent = `${state.minRadiusRatio.toFixed(1)} × D`;
-  if ($('v-piece')) $('v-piece').textContent = `${state.maxPieceLengthMm} mm`;
-  if ($('v-flange')) $('v-flange').textContent = `${state.flangeBendOffsetMm} mm`;
-  if ($('v-slope')) $('v-slope').textContent = `${state.slopeDeg ?? 3}°`;
+  $('v-ratio').textContent = `${state.minRadiusRatio.toFixed(1)} \u00d7 D`;
+  $('v-piece').textContent = `${state.maxPieceLength} mm`;
+  $('v-offset').textContent = `${state.elbowFlangeOffset} mm`;
+  $('v-slope').textContent = `${state.slopeDeg}\u00b0`;
 
   const minR = minRadiusFor(state);
   $('ratioNote').textContent = state.minRadiusRatio < 1
-    ? `Minimum centerline radius ${minR.toFixed(0)} mm. Below 0.5 × D the inner surface folds through itself.`
+    ? `Minimum centerline radius ${minR.toFixed(0)} mm. Below 0.5 \u00d7 D the inner surface folds through itself.`
     : `Minimum centerline radius ${minR.toFixed(0)} mm, measured against the widest band.`;
   $('ratioNote').classList.toggle('ctl-note--warn', state.minRadiusRatio < 1);
 
   const swallowed = state.jacketWidth <= state.ductWidth;
   $('jacketNote').textContent = swallowed
     ? 'Jacket is not wider than the duct, so it is hidden inside it.'
-    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(0)} mm of cover around the duct.`;
+    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} mm of cover around the duct.`;
   $('jacketNote').classList.toggle('ctl-note--warn', swallowed);
-
-  // Keeps the collapsed accordion honest about what it is hiding.
-  $('accDigest').textContent = [
-    state.features.duct ? `duct ${state.ductWidth} mm` : null,
-    state.features.jacket ? `jacket ${state.jacketWidth} mm` : null,
-    state.features.flanges ? `piece ${state.maxPieceLengthMm} mm` : null,
-    state.features.drainSlope ? `drain ≥ ${state.slopeDeg ?? 3}°` : null,
-    `±${state.toleranceDeg}°`,
-  ].filter(Boolean).join(' · ');
-}
-
-function currentPieces(state) {
-  return layoutPieces(solution, flangeOptionsFor(state)).pieces;
 }
 
 function render() {
   const state = viewState();
-  solution = solvePath(state.points, state.initialTangent, state.toleranceDeg, minRadiusFor(state), classifyOpts(state));
+  solution = solvePath(state.points, state.initialTangent, shopOptions(state));
 
-  renderScene(ctx, state, solution, anchorIndex(state));
+  pieces = renderScene(ctx, state, solution, anchorIndex(state));
+  renderPieces(pieceEls, pieces, state.selectedPieceIndex);
   renderTable(ptBody, state, solution);
   renderSummary(summaryEl, solution, state);
-  renderPiecePanel(pieceSelect, pieceDetail, pieceDigest, state, currentPieces(state));
   syncControls(state);
 }
 
-const round = (v) => Math.round(v);
+const round = (v) => Math.round(v * 10) / 10;
 
 // ---------------------------------------------------------------- table input
 
@@ -134,25 +115,39 @@ ptBody.addEventListener('click', (e) => {
     else if (act === 'fix') autoFix(id);
     return;
   }
+  // Clicking into a coordinate field is an edit. Selecting would re-render and replace the
+  // input mid-click, which is how the caret used to get thrown away.
+  if (e.target.closest('input')) return;
+
   const row = e.target.closest('tr[data-id]');
-  if (!row || e.target.closest('input.num')) return;
-  if (row.dataset.id !== getState().selectedId) update({ selectedId: row.dataset.id });
-  const p = getState().points.find((q) => q.id === row.dataset.id);
-  if (p && ctx) focusPoint(ctx, p);
+  if (!row) return;
+
+  update({ selectedId: row.dataset.id });
+
+  const point = getState().points.find((p) => p.id === row.dataset.id);
+  if (point) focusOn(ctx, point);
 });
 
+/**
+ * Two different repairs share one button. A too-flat straight is pitched onto the drain angle;
+ * anything else is pulled onto the nearest cone. Neither inserts a table point.
+ */
 function autoFix(id) {
   const state = viewState();
   const i = state.points.findIndex((p) => p.id === id);
   if (i < 1) return;
 
-  const fixed = snapToLegal(
-    state.points[i - 1],
-    state.points[i],
-    tangentAt(solution, i - 1, state.initialTangent),
-    minRadiusFor(state),
-    classifyOpts(state),
-  );
+  const prev = state.points[i - 1];
+  const here = state.points[i];
+
+  if (solution.segments[i - 1]?.reason === 'off-slope') {
+    const run = Math.hypot(here.x - prev.x, here.y - prev.y);
+    const rise = pitchedRise(run, state.slopeDeg, here.z - prev.z);
+    movePoint(id, { z: round(prev.z + rise) });
+    return;
+  }
+
+  const fixed = snapToLegal(prev, here, tangentAt(solution, i - 1, state.initialTangent), minRadiusFor(state));
   movePoint(id, { x: round(fixed.x), y: round(fixed.y), z: round(fixed.z) });
 }
 
@@ -164,17 +159,25 @@ $('tolerance').addEventListener('input', (e) => update({ toleranceDeg: Number(e.
 $('ductWidth').addEventListener('input', (e) => update({ ductWidth: Number(e.target.value) }));
 $('jacketWidth').addEventListener('input', (e) => update({ jacketWidth: Number(e.target.value) }));
 $('minRadiusRatio').addEventListener('input', (e) => update({ minRadiusRatio: Number(e.target.value) }));
-$('maxPieceLengthMm')?.addEventListener('input', (e) => update({ maxPieceLengthMm: Number(e.target.value) }));
-$('flangeBendOffsetMm')?.addEventListener('input', (e) => update({ flangeBendOffsetMm: Number(e.target.value) }));
-$('slopeDeg')?.addEventListener('input', (e) => update({ slopeDeg: Number(e.target.value) }));
+$('maxPieceLength').addEventListener('input', (e) => update({ maxPieceLength: Number(e.target.value) }));
+$('elbowFlangeOffset').addEventListener('input', (e) => update({ elbowFlangeOffset: Number(e.target.value) }));
+$('slopeDeg').addEventListener('input', (e) => update({ slopeDeg: Number(e.target.value) }));
 $('showDuct').addEventListener('change', (e) => update({ showDuct: e.target.checked }));
 $('showJacket').addEventListener('change', (e) => update({ showJacket: e.target.checked }));
+$('showFlanges').addEventListener('change', (e) => update({ showFlanges: e.target.checked }));
 $('showGuides').addEventListener('change', (e) => update({ showGuides: e.target.checked }));
 $('snapEnabled').addEventListener('change', (e) => update({ snapEnabled: e.target.checked }));
 
-bindPiecePanel(pieceSelect, pieceDetail, { selectPiece, setPieceOverride, splitPiece });
+$('pieceSelect').addEventListener('change', (e) => update({ selectedPieceIndex: Number(e.target.value) }));
 
-/** New points land on a cone, so an added point starts out valid. */
+$('btnSplit').addEventListener('click', () => {
+  const piece = pieces[getState().selectedPieceIndex];
+  if (!piece || piece.kind !== 'straight') return;
+  const key = pieceKey(piece);
+  update((s) => ({ extraSplits: { ...s.extraSplits, [key]: (s.extraSplits[key] ?? 0) + 1 } }));
+});
+
+/** New points land straight ahead on the current tangent, so an added point starts out valid. */
 $('btnAdd').addEventListener('click', () => {
   const state = viewState();
   if (state.points.length === 0) {
@@ -183,28 +186,15 @@ $('btnAdd').addEventListener('click', () => {
   }
 
   const last = state.points[state.points.length - 1];
-  let tangent = tangentAt(solution, state.points.length - 1, state.initialTangent);
-  const minRadius = minRadiusFor(state);
-  const slope = slopeOptionsFor(state);
-  if (slope) {
-    const elev = Math.asin(Math.min(1, Math.max(-1, tangent.z))) * (180 / Math.PI);
-    if (Math.abs(elev) < slope.slopeDeg - (slope.slopeTol ?? 1)) {
-      const heading = Math.atan2(tangent.y, tangent.x) * (180 / Math.PI);
-      const sign = Math.sign(tangent.z) || 1;
-      tangent = V.fromAngles(heading, sign * slope.slopeDeg);
-    }
-  }
-
-  // Straight ahead by default: the 0 cone has no dead zone and introduces no turn.
-  const reach = Math.max(defaultAddReach(state, 1600), minChordFor(legalCones().at(-1).theta, minRadius));
-  const target = V.add(last, V.scale(tangent, reach));
+  const tangent = tangentAt(solution, state.points.length - 1, state.initialTangent);
+  const target = V.add(last, V.scale(tangent, Math.max(1200, state.maxPieceLength)));
 
   addPoint(round(target.x), round(target.y), round(target.z));
   fitCamera(ctx, getState().points);
 });
 
 $('btnFit').addEventListener('click', () => fitCamera(ctx, getState().points));
-$('btnResetView')?.addEventListener('click', () => fitCamera(ctx, getState().points));
+$('btnReset').addEventListener('click', () => resetView(ctx, getState().points));
 $('btnClear').addEventListener('click', () => clearPoints());
 
 $('btnExport').addEventListener('click', () => {
@@ -247,14 +237,7 @@ function boot() {
 
   ctx = initScene($('viewport'));
   subscribe(render);
-
-  ctx.renderer.domElement.addEventListener('pointermove', (e) => {
-    const state = getState();
-    if (!state.features.flanges) return placePieceTip(pieceTip, null);
-    const piece = pickPieceFromEvent(ctx, e);
-    placePieceTip(pieceTip, piece ? describePiece(piece, state) : null, e.clientX, e.clientY);
-  });
-  ctx.renderer.domElement.addEventListener('pointerleave', () => placePieceTip(pieceTip, null));
+  attachTooltip();
 
   // A valid 2D path is always a valid 3D path: its rays are these cones cut by the z = 0 plane.
   const handed = config.features.crossLink ? takePath() : null;
@@ -266,6 +249,29 @@ function boot() {
 
   render();
   fitCamera(ctx, getState().points);
+}
+
+/** Hovering a duct piece reports its flange-to-flange length and how far it turns. */
+function attachTooltip() {
+  const canvas = ctx.renderer.domElement;
+
+  canvas.addEventListener('pointermove', (e) => {
+    const hit = pickPiece(ctx, e.clientX, e.clientY);
+    if (!hit) {
+      tooltip.hidden = true;
+      return;
+    }
+    tooltip.hidden = false;
+    tooltip.textContent = hit.label;
+    tooltip.style.left = `${e.clientX + 14}px`;
+    tooltip.style.top = `${e.clientY + 14}px`;
+  });
+
+  canvas.addEventListener('pointerleave', () => { tooltip.hidden = true; });
+  canvas.addEventListener('pointerdown', (e) => {
+    const hit = pickPiece(ctx, e.clientX, e.clientY);
+    if (hit) update({ selectedPieceIndex: hit.piece.index });
+  });
 }
 
 /**

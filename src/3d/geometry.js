@@ -1,18 +1,21 @@
 // 3D specialisation: the incoming tangent is a unit vector, so each permitted half-angle
 // sweeps out a *cone* around it rather than a pair of rays (docs/requirements.md §3.5).
 //
-// The consequence is that validation is simpler here than in 2D: one angle between the tangent
-// and the chord, compared against the half-angle set. There is no handedness to choose, because
-// the arc's plane is fixed by the tangent and the chord together.
+// Two things make 3D harder than 2D rather than simpler. A shop elbow is planar — it yaws in
+// plan or pitches in elevation, never both at once — so a legal cone angle is not enough. And a
+// horizontal duct has to drain, so a straight is judged on its pitch as well as its direction.
 
 import { DEG, nearestSweep, sweepCandidates } from '../core/angles.js';
 import { EPS, radiusFor, minChordFor, isTooTight } from '../core/arcMath.js';
 import { walkPath } from '../core/solve.js';
-import { compactBendParams, fabricationSpans, shopElbowRadius } from '../core/flange.js';
-import { isTooFlat, pitchDeg, slopeFloorDeg } from '../core/slope.js';
+import { drains } from '../core/slope.js';
+import { angledStraightPlan, cardinalPlan } from '../core/routing.js';
+import { elbowLayout } from '../core/pieces.js';
 import * as V from './vec3.js';
 
 export { V };
+
+const WORLD_UP = V.vec(0, 0, 1);
 
 /** The distinct cone half-angles; a 3D cone needs no left/right split. */
 export function legalCones() {
@@ -29,81 +32,35 @@ export function coneAngleDeg(tangent, chordDir) {
 }
 
 /**
- * Orthonormal frame around the incoming tangent: `h` is world-horizontal left/right (plan),
- * `v` is up/down in the vertical plane that contains the tangent (elevation).
+ * Right-handed frame carried by the tangent: `side` is horizontal, `up` is the vertical
+ * in-plane direction. Plan and elevation are measured here rather than against the world axes,
+ * so a duct already running down a drain ramp can still take a pure plan elbow.
  */
-export function bendFrame(tangent) {
-  const t = V.normalize(tangent);
-  let h = V.cross(V.vec(0, 0, 1), t);
-  if (V.length(h) < EPS) h = V.vec(1, 0, 0);
-  h = V.normalize(h);
-  const v = V.normalize(V.cross(t, h));
-  return { t, h, v };
+export function tangentFrame(tangent) {
+  const tau = V.normalize(tangent);
+  let side = V.cross(tau, WORLD_UP);
+  // Straight up or down has no horizontal side; any perpendicular will do.
+  if (V.length(side) < 1e-6) side = V.vec(0, 1, 0);
+  side = V.normalize(side);
+  return { tau, side, up: V.normalize(V.cross(side, tau)) };
 }
 
-/**
- * How far the chord's turn is from a pure plan or elevation bend, in degrees.
- * A straight run (chord along the tangent) is 0 — there is no turn to judge (R-90).
- */
-export function planeErrorDeg(tangent, chordDir) {
-  const t = V.normalize(tangent);
-  const d = V.normalize(chordDir);
-  const sideways = V.sub(d, V.scale(t, V.dot(t, d)));
-  if (V.length(sideways) < EPS) return 0;
+/** The four cardinal generators of each cone, plus the straight-ahead ray — not a full ring. */
+export function coneGuides(tangent) {
+  const { tau, side, up } = tangentFrame(tangent);
+  const out = [];
 
-  const { h, v } = bendFrame(t);
-  const n = V.normalize(sideways);
-  const az = Math.atan2(V.dot(n, v), V.dot(n, h)) / DEG;
-  const folded = Math.abs(((az % 90) + 90) % 90);
-  return Math.min(folded, 90 - folded);
-}
-
-/** Nearest plan or elevation unit, in the plane perpendicular to the tangent. */
-export function cardinalInward(tangent, chordDir) {
-  const { h, v } = bendFrame(tangent);
-  const t = V.normalize(tangent);
-  const d = V.normalize(chordDir);
-  let sideways = V.sub(d, V.scale(t, V.dot(t, d)));
-  if (V.length(sideways) < EPS) return h;
-  sideways = V.normalize(sideways);
-  const ah = V.dot(sideways, h);
-  const av = V.dot(sideways, v);
-  if (Math.abs(ah) >= Math.abs(av)) return V.scale(h, Math.sign(ah) || 1);
-  return V.scale(v, Math.sign(av) || 1);
-}
-
-/** 'straight' | 'plan' | 'elev' — which cardinal the chord's sideways sits on. */
-export function turnAxis(tangent, chordDir) {
-  const t = V.normalize(tangent);
-  const d = V.normalize(chordDir);
-  const sideways = V.sub(d, V.scale(t, V.dot(t, d)));
-  if (V.length(sideways) < EPS) return 'straight';
-  const { h, v } = bendFrame(t);
-  const n = V.normalize(sideways);
-  return Math.abs(V.dot(n, v)) >= Math.abs(V.dot(n, h)) ? 'elev' : 'plan';
-}
-
-/** 'straight' | 'plan' | 'elev' — which cardinal the (valid) bend sits on. */
-export function turnKind(seg) {
-  if (!seg?.arc || seg.arc.straight) return 'straight';
-  if (seg.from && seg.to && seg.tauIn) return turnAxis(seg.tauIn, V.sub(seg.to, seg.from));
-  if (!seg.tauIn || !seg.arc.normal) return 'elbow';
-  const { h, v } = bendFrame(seg.tauIn);
-  return Math.abs(V.dot(seg.arc.normal, v)) >= Math.abs(V.dot(seg.arc.normal, h)) ? 'plan' : 'elev';
-}
-
-/** Straight ahead, or the four cardinal generators of a cone of half-angle `half`. */
-export function legalDirections(tangent, half) {
-  const { t, h, v } = bendFrame(tangent);
-  if (!(half > 0)) return [t];
-  const c = Math.cos(half * DEG);
-  const s = Math.sin(half * DEG);
-  return [
-    V.add(V.scale(t, c), V.scale(h, s)),
-    V.add(V.scale(t, c), V.scale(h, -s)),
-    V.add(V.scale(t, c), V.scale(v, s)),
-    V.add(V.scale(t, c), V.scale(v, -s)),
-  ];
+  for (const { theta, half } of legalCones()) {
+    if (theta === 0) {
+      out.push({ theta, half, label: 'straight', dir: tau });
+      continue;
+    }
+    const c = Math.cos(half * DEG);
+    const s = Math.sin(half * DEG);
+    const spoke = (axis, k, label) => ({ theta, half, label, dir: V.add(V.scale(tau, c), V.scale(axis, k * s)) });
+    out.push(spoke(side, 1, 'left'), spoke(side, -1, 'right'), spoke(up, 1, 'up'), spoke(up, -1, 'down'));
+  }
+  return out;
 }
 
 /**
@@ -150,397 +107,254 @@ function anyPerpendicular(v) {
   return V.cross(v, seed);
 }
 
-/** Points along a segment, for drawing. A straight run needs only its endpoints. */
-export function samplePoints(seg, divisions = 24) {
-  const { arc, from, to } = seg;
-  if (!arc || arc.straight) return [from, to];
+/** Samples along a circular arc of radius `radius` leaving `from` on heading `tStart`. */
+export function arcSamples(from, tStart, normal, radius, theta, divisions = 24) {
+  const inward = V.normalize(V.cross(normal, tStart));
+  const center = V.add(from, V.scale(inward, radius));
+  const spoke = V.scale(inward, -radius);
 
   const out = [];
-  const start = V.scale(arc.inward, -arc.radius);
   for (let i = 0; i <= divisions; i++) {
-    const angle = (arc.theta * DEG * i) / divisions;
-    out.push(V.add(arc.center, V.rotateAbout(start, arc.normal, angle)));
+    out.push(V.add(center, V.rotateAbout(spoke, normal, (theta * DEG * i) / divisions)));
   }
   return out;
 }
 
-/**
- * Decide whether p0 -> p1 is a legal connection given incoming unit tangent `tangent`.
- * Mirrors the 2D contract: `ok` is the centerline, `tooTight` is the band's bend limit,
- * and `tOut` falls back to the chord direction on a violation so errors do not cascade.
- *
- * `opts.slopeDeg` / `opts.slopeTol` enable drainage (R-110). `opts.splitCompound === false`
- * stops a compound span from inserting planar shop legs (used when classifying those legs).
- */
+/** Points along a segment's own table arc. A straight run needs only its endpoints. */
+export function samplePoints(seg, divisions = 24) {
+  const { arc, from, to } = seg;
+  if (!arc || arc.straight) return [from, to];
+  return arcSamples(from, arc.tStart, arc.normal, arc.radius, arc.theta, divisions);
+}
 
-export function classifySegment(p0, p1, tangent, toleranceDeg, minRadius = 0, opts = null) {
+const fail = (reason, extra, tOut) => ({
+  ok: false, tooTight: false, reason, arc: null, shop: null, route: null, ...extra, tOut,
+});
+
+/**
+ * Classify one table span, in the order the spec lays down: degenerate, off the cones, rolling
+ * elbow, Y+Z routing, drain, bend limit, shop layout.
+ *
+ * `ok` covers the centerline. `tooTight` is separate: the arc is angularly legal but its radius
+ * is below `minRadius`, so a band of that width cannot follow it — the run is not broken.
+ * `tOut` is the tangent handed on; on a violation it falls back to the straight chord so one bad
+ * point does not invalidate everything after it.
+ */
+export function classifySegment(p0, p1, tangent, opts = {}) {
+  const {
+    toleranceDeg = 2,
+    minRadius = 0,
+    flangeOffset = 60,
+    maxPieceLength = 1050,
+    minLead = 100,
+    slopeDeg = 3,
+    slopeToleranceDeg = 1,
+    drain = true,
+  } = opts;
+
   const chordVec = V.sub(p1, p0);
   const chord = V.length(chordVec);
 
   if (chord < EPS) {
-    return { ok: false, tooTight: false, reason: 'degenerate', chord: 0, cone: 0, planeError: 0, error: 0, nearest: null, arc: null, minRadius, tauIn: tangent, tOut: tangent, pitch: 0 };
+    return fail('degenerate', { chord: 0, cone: 0, error: 0, nearest: null, minRadius }, tangent);
   }
 
   const dir = V.normalize(chordVec);
+  const frame = tangentFrame(tangent);
+  const along = V.dot(chordVec, frame.tau);
+  const lateral = V.dot(chordVec, frame.side);
+  const vertical = V.dot(chordVec, frame.up);
+
+  // Deviation split into the only two planes a shop elbow is allowed to live in.
+  const devPlan = Math.atan2(lateral, along) / DEG;
+  const devElev = Math.atan2(vertical, along) / DEG;
+
   const cone = coneAngleDeg(tangent, dir);
   const nearest = nearestSweep(cone);
-  const planeError = planeErrorDeg(tangent, dir);
-  const pitch = pitchDeg(p0, p1);
-  const compound = planeError > toleranceDeg + 1e-9;
-  const sweepOk = Math.abs(nearest.error) <= toleranceDeg;
-  const slopeOn = Number.isFinite(opts?.slopeDeg);
-  const floor = slopeOn ? slopeFloorDeg(opts.slopeDeg, opts.slopeTol ?? 1) : 0;
-
-  const finish = (arc, extra = {}) => {
-    const tooTight = isTooTight(arc.radius, minRadius);
-    return {
-      ok: true,
-      tooTight,
-      reason: tooTight ? 'too-tight' : null,
-      chord, cone, planeError, pitch, error: nearest.error, nearest, arc, minRadius,
-      minChord: minChordFor(arc.theta, minRadius),
-      tauIn: tangent,
-      tOut: arc.tEnd,
-      ...extra,
-    };
+  const base = {
+    chord, cone, error: nearest.error, nearest, minRadius,
+    minChord: minChordFor(nearest.theta, minRadius), devPlan, devElev,
   };
+  const onCone = Math.abs(nearest.error) <= toleranceDeg;
 
-  if (sweepOk && !compound) {
-    const arc = arcFrom(p0, p1, nearest.theta, tangent);
-    if (slopeOn && arc.straight && isTooFlat(p0, p1, opts.slopeDeg, opts.slopeTol)) {
-      return {
-        ok: false, tooTight: false, reason: 'off-slope',
-        chord, cone, planeError, pitch, error: Math.abs(pitch), nearest, arc, minRadius,
-        minChord: 0, tauIn: tangent, tOut: dir,
-      };
+  if (onCone && nearest.theta === 0) {
+    const arc = arcFrom(p0, p1, 0, tangent);
+    const rise = (p1.z ?? 0) - (p0.z ?? 0);
+    if (drain && !drains(rise, chord, slopeDeg, slopeToleranceDeg)) {
+      return fail('off-slope', { ...base, rise }, dir);
     }
-    return finish(arc);
+    return {
+      ok: true, tooTight: false, reason: null, ...base, arc, route: 'straight', rise,
+      shop: { kind: 'straight', length: chord }, tOut: arc.tEnd,
+    };
   }
 
-  if (compound && opts?.splitCompound !== false) {
-    const split = splitCompound(p0, p1, tangent, toleranceDeg, minRadius, opts);
-    if (split) {
+  if (onCone) {
+    // Built from the actual chord, so the swept angle stays exactly one of the permitted set.
+    const plane = Math.abs(devElev) <= toleranceDeg ? 'plan'
+      : Math.abs(devPlan) <= toleranceDeg ? 'elev'
+        : null;
+
+    if (plane) {
+      const arc = arcFrom(p0, p1, nearest.theta, tangent);
+      const tooTight = isTooTight(arc.radius, minRadius);
+      const layout = elbowLayout({
+        tableRadius: arc.radius, theta: nearest.theta, minRadius, flangeOffset, maxPieceLength,
+      });
       return {
         ok: true,
-        tooTight: split.legs.some((l) => l.tooTight),
-        reason: null,
-        chord, cone, planeError, pitch, error: 0, nearest,
-        arc: split.legs[split.legs.length - 1].arc,
-        minRadius,
-        minChord: Math.max(0, ...split.legs.map((l) => l.minChord || 0)),
-        tauIn: tangent,
-        tOut: split.legs[split.legs.length - 1].tOut,
-        legs: split.legs,
-        via: split.via,
-        split: split.order,
+        tooTight,
+        reason: layout.reason ?? (tooTight ? 'too-tight' : null),
+        ...base,
+        arc,
+        route: plane,
+        shop: { kind: 'elbow', ...layout },
+        tOut: arc.tEnd,
       };
     }
   }
 
-  // A straight that rises or falls enough to drain is valid even when the cone is
-  // closer to a 30° fitting than to 0° (R-111, R-113). Plan turns stay discrete.
-  if (slopeOn && !compound && Math.abs(pitch) + 1e-9 >= floor) {
-    const axis = turnAxis(tangent, dir);
-    if (axis === 'elev' || axis === 'straight') {
-      const arc = arcFrom(p0, p1, 0, dir);
-      return finish(arc, { error: 0, reason: null, slopedStraight: true });
-    }
+  // Either off every cone, or a legal cone angle that would need a rolling elbow. Both are only
+  // routable when the span has to change elevation relative to the tangent; a purely lateral
+  // miss has no shop trick and is simply off the fan.
+  if (Math.abs(devElev) <= toleranceDeg) {
+    return fail('no-legal-arc', base, dir);
   }
 
-  if (slopeOn && !compound && (nearest.theta === 0 || turnAxis(tangent, dir) === 'straight') && isTooFlat(p0, p1, opts.slopeDeg, opts.slopeTol)) {
+  const kickFrom = V.add(p0, V.scale(frame.tau, minLead));
+  const outVec = V.sub(p1, kickFrom);
+  const outLength = V.length(outVec);
+  const outDir = outLength > EPS ? V.normalize(outVec) : frame.tau;
+  const kickDeg = coneAngleDeg(frame.tau, outDir);
+
+  const angled = angledStraightPlan({ alongTrack: along, lead: minLead, kickDeg, outLength });
+  if (angled.ok) {
+    // The incoming stub may stay level; drain is judged on the run after the kick.
+    const rise = (p1.z ?? 0) - (kickFrom.z ?? 0);
+    if (drain && !drains(rise, outLength, slopeDeg, slopeToleranceDeg)) {
+      return fail('off-slope', { ...base, route: 'angled', rise }, outDir);
+    }
     return {
-      ok: false, tooTight: false, reason: 'off-slope',
-      chord, cone, planeError, pitch, error: Math.abs(pitch), nearest, arc: null, minRadius,
-      tauIn: tangent, tOut: dir,
+      ok: true, tooTight: false, reason: null, ...base, arc: null, route: 'angled', rise,
+      shop: { kind: 'angled', lead: minLead, kickDeg, outLength },
+      kick: { at: kickFrom, dir: outDir, deg: kickDeg },
+      tOut: outDir,
     };
   }
 
-  if (sweepOk && compound) {
+  const cardinal = cardinalPlan({ along, lateral, vertical, minRadius, flangeOffset });
+  if (cardinal.ok) {
     return {
-      ok: false, tooTight: false, reason: 'compound-bend',
-      chord, cone, planeError, pitch, error: planeError, nearest, arc: null, minRadius,
-      tauIn: tangent, tOut: dir,
+      ok: true, tooTight: false, reason: null, ...base, arc: null, route: 'cardinal',
+      shop: { kind: 'cardinal', radius: cardinal.radius, legs: cardinal.legs },
+      cardinal: { ...cardinal, frame },
+      tOut: V.scale(frame.up, cardinal.verticalSign),
     };
   }
 
-  return { ok: false, tooTight: false, reason: 'no-legal-arc', chord, cone, planeError, pitch, error: nearest.error, nearest, arc: null, minRadius, tauIn: tangent, tOut: dir };
-}
-
-function asLeg(result, from, to) {
-  return { ...result, from, to, legs: undefined, via: undefined, split: undefined };
-}
-
-function tryShopLegs(points, tau0, order, toleranceDeg, minRadius, childOpts) {
-  if (points.length < 2) return null;
-  const last = points[points.length - 1];
-  const legs = [];
-  let tau = tau0;
-  for (let i = 0; i + 1 < points.length; i++) {
-    if (V.distance(points[i], points[i + 1]) < EPS) return null;
-    const leg = asLeg(
-      classifySegment(points[i], points[i + 1], tau, toleranceDeg, minRadius, childOpts),
-      points[i],
-      points[i + 1],
-    );
-    if (!leg.ok) return null;
-    legs.push(leg);
-    tau = leg.tOut;
-  }
-  return { order, via: points[1], legs, to: last };
+  return fail('compound-bend', base, dir);
 }
 
 /**
- * Waypoints for two 90° cardinal elbows plus leftover straights.
- * `aHat` is the first turn (plan or elev); `bHat` is the second.
- * End = p0 + (La+R) t + (2R+Lm) aHat + (R+Lb) bHat.
+ * Expand a span into the stretches a shop would actually build, as sampled polylines.
+ * `kind` drives the overlay colour: amber elbow arcs, teal kicks, plain everywhere else.
  */
-function cardinalWaypoints(p0, t, aHat, bHat, La, R, Lm, Lb) {
-  const pts = [p0];
-  let pos = p0;
-  const push = (next) => {
-    if (V.distance(pos, next) > EPS) pts.push(next);
-    pos = next;
-  };
-  if (La > EPS) push(V.add(pos, V.scale(t, La)));
-  push(V.add(pos, V.add(V.scale(t, R), V.scale(aHat, R))));
-  if (Lm > EPS) push(V.add(pos, V.scale(aHat, Lm)));
-  push(V.add(pos, V.add(V.scale(aHat, R), V.scale(bHat, R))));
-  if (Lb > EPS) push(V.add(pos, V.scale(bHat, Lb)));
-  return pts;
-}
+export function expandSegment(seg, divisions = 24) {
+  const { from, to, shop, arc } = seg;
+  if (!seg.ok || !shop) return [];
 
-function dirPitchDeg(dir) {
-  const L = V.length(dir);
-  if (!(L > EPS)) return 0;
-  return Math.asin(Math.min(1, Math.max(-1, dir.z / L))) / DEG;
-}
+  if (shop.kind === 'straight') return [{ kind: 'straight', points: [from, to] }];
 
-/** Horizontal run pitched by `alpha` toward `vHat`, so a straight can drain (R-111). A riser is left alone. */
-function pitchedHorizontal(dir, vHat, alpha) {
-  const horiz = V.vec(dir.x, dir.y, 0);
-  if (V.length(horiz) < EPS) return dir;
-  const h = V.normalize(horiz);
-  return V.normalize(V.add(V.scale(h, Math.cos(alpha)), V.scale(vHat, Math.sin(alpha))));
-}
-
-function perpToward(tau, toward) {
-  const u = V.sub(toward, V.scale(tau, V.dot(tau, toward)));
-  if (V.length(u) < EPS) return null;
-  return V.normalize(u);
-}
-
-/**
- * Same cardinal 90°/straight skeleton as `cardinalWaypoints`, but every too-flat leftover is
- * pitched to `alpha` toward `vHat`. The last point is the table endpoint so leftover rise
- * is a riser/slant (R-111, R-112).
- */
-function cardinalWaypointsDrained(p0, p1, t, aHat, bHat, vHat, La, R, Lm, alpha) {
-  const pts = [p0];
-  let pos = p0;
-  const push = (next) => {
-    if (V.distance(pos, next) > EPS) pts.push(next);
-    pos = next;
-  };
-  let tau = t;
-  const floor = slopeFloorDeg(alpha / DEG, 1);
-
-  if (La > EPS) {
-    const flat = Math.abs(dirPitchDeg(tau)) + 1e-9 < floor;
-    const dir = flat ? pitchedHorizontal(tau, vHat, alpha) : tau;
-    const L = Math.abs(dir.z) > 0.9 ? La : La / Math.max(Math.cos(alpha), 0.2);
-    push(V.add(pos, V.scale(dir, L)));
-    tau = dir;
+  if (shop.kind === 'elbow') {
+    const { leftover, radius, theta } = shop;
+    const f1 = V.add(from, V.scale(arc.tStart, leftover));
+    const f2 = V.sub(to, V.scale(arc.tEnd, leftover));
+    const out = [];
+    if (leftover > EPS) out.push({ kind: 'straight', points: [from, f1] });
+    out.push({ kind: 'elbow', arcDeg: theta, points: arcSamples(f1, arc.tStart, arc.normal, radius, theta, divisions) });
+    if (leftover > EPS) out.push({ kind: 'straight', points: [f2, to] });
+    return out;
   }
 
-  const turn0 = perpToward(tau, aHat) ?? aHat;
-  push(V.add(pos, V.add(V.scale(tau, R), V.scale(turn0, R))));
-  tau = turn0;
-
-  if (Lm > EPS) {
-    const flat = Math.abs(dirPitchDeg(tau)) + 1e-9 < floor;
-    const dir = flat ? pitchedHorizontal(tau, vHat, alpha) : tau;
-    const L = flat ? Lm / Math.max(Math.cos(alpha), 0.2) : Lm;
-    push(V.add(pos, V.scale(dir, L)));
-    tau = dir;
+  if (shop.kind === 'angled') {
+    // The kick is a vertex, so it gets a short flag either side of it to be visible at all.
+    const at = seg.kick.at;
+    const flag = 250;
+    const back = V.add(at, V.scale(V.normalize(V.sub(from, at)), Math.min(flag, shop.lead / 2)));
+    const fwd = V.add(at, V.scale(seg.kick.dir, Math.min(flag, shop.outLength / 2)));
+    return [
+      { kind: 'straight', points: [from, at] },
+      { kind: 'kick', arcDeg: shop.kickDeg, points: [back, at, fwd] },
+      { kind: 'straight', points: [at, to] },
+    ];
   }
 
-  const turn1 = perpToward(tau, bHat) ?? bHat;
-  push(V.add(pos, V.add(V.scale(tau, R), V.scale(turn1, R))));
-  push(p1);
-  return pts;
+  if (shop.kind === 'cardinal') {
+    const { frame, lateralSign, verticalSign, radius } = seg.cardinal;
+    const dirs = [frame.tau, V.scale(frame.side, lateralSign), V.scale(frame.up, verticalSign)];
+    const out = [];
+    let cursor = from;
+
+    for (let i = 0; i < dirs.length; i++) {
+      const isLast = i === dirs.length - 1;
+      const leg = shop.legs[i] - (i > 0 ? radius : 0) - (isLast ? 0 : radius);
+      const end = V.add(cursor, V.scale(dirs[i], Math.max(leg, 0)));
+      out.push({ kind: 'straight', points: [cursor, end] });
+      if (isLast) break;
+
+      const normal = V.normalize(V.cross(dirs[i], dirs[i + 1]));
+      const samples = arcSamples(end, dirs[i], normal, radius, 90, divisions);
+      out.push({ kind: 'elbow', arcDeg: 90, points: samples });
+      cursor = samples[samples.length - 1];
+    }
+    return out;
+  }
+
+  return [];
 }
 
-function straightsDrain(legs, opts) {
-  if (!Number.isFinite(opts?.slopeDeg)) return true;
-  return legs.every((l) => !l.arc?.straight || !isTooFlat(l.from, l.to, opts.slopeDeg, opts.slopeTol));
-}
+/** The shop centerline of a whole run, as one polyline plus the kind-tagged stretches on it. */
+export function expandRun(run, divisions = 24) {
+  const stretches = [];
+  for (const seg of run) {
+    for (const st of expandSegment(seg, divisions)) stretches.push({ ...st, segIndex: seg.index });
+  }
 
-/**
- * Route a compound table span as planar shop legs: 90° plan and 90° elevation, with
- * leftover as straights (R-90c). Discrete 30/45/60 cones cannot generally hit an
- * arbitrary Y+Z chord with C1, so the shop path uses sharp cardinal elbows instead.
- * Waypoints are derived; they are not table points.
- *
- * Straight leftovers are pitched to `slopeDeg` when drain is on (R-111); elbows are
- * not judged for pitch. Waypoints are derived; they are not table points.
- */
-export function splitCompound(p0, p1, tangent, toleranceDeg, minRadius = 0, opts = null) {
-  const slopeOn = Number.isFinite(opts?.slopeDeg);
-  const childOpts = { ...(opts ?? {}), splitCompound: false };
-  const { t, h, v } = bendFrame(tangent);
-  const delta = V.sub(p1, p0);
-  const along = V.dot(delta, t);
-  const plan = V.dot(delta, h);
-  const elev = V.dot(delta, v);
-  if (!(along > EPS) || Math.abs(plan) < EPS || Math.abs(elev) < EPS) return null;
-
-  const hHat = V.scale(h, Math.sign(plan));
-  const vHat = V.scale(v, Math.sign(elev) || 1);
-  const absPlan = Math.abs(plan);
-  const absElev = Math.abs(elev);
-
-  const candidates = [
-    { order: 'plan-elev', aHat: hHat, bHat: vHat, mid: absPlan, last: absElev },
-    { order: 'elev-plan', aHat: vHat, bHat: hHat, mid: absElev, last: absPlan },
-  ];
-
-  const offsetMm = Number.isFinite(opts?.offsetMm) ? opts.offsetMm : 60;
-  const maxPieceMm = Number.isFinite(opts?.maxPieceMm) ? opts.maxPieceMm : 1050;
-  const alpha = slopeOn ? (opts.slopeDeg ?? 3) * DEG : 0;
-
-  let best = null;
-  for (const spec of candidates) {
-    const rMax = Math.min(along, spec.mid / 2, spec.last);
-    if (!(rMax > EPS)) continue;
-    const R = Math.min(rMax, shopElbowRadius(rMax, 90, offsetMm, maxPieceMm, minRadius));
-    if (!(R > EPS)) continue;
-    const La = along - R;
-    const Lm = spec.mid - 2 * R;
-    const Lb = spec.last - R;
-    const points = slopeOn
-      ? cardinalWaypointsDrained(p0, p1, t, spec.aHat, spec.bHat, vHat, La, R, Lm, alpha)
-      : cardinalWaypoints(p0, t, spec.aHat, spec.bHat, La, R, Lm, Lb);
-    const hit = tryShopLegs(points, tangent, spec.order, toleranceDeg, minRadius, childOpts);
-    if (!hit) continue;
-    if (V.distance(hit.to, p1) > 1e-3) continue;
-    if (slopeOn && !straightsDrain(hit.legs, opts)) continue;
-    const straight = La + Lm + Lb;
-    const longest = Math.max(La, Lm, Lb);
-    if (
-      !best
-      || straight > best.straight + 1e-6
-      || (Math.abs(straight - best.straight) <= 1e-6 && longest > best.longest + 1e-6)
-    ) {
-      best = { ...hit, R, straight, longest };
+  const points = [];
+  for (const st of stretches) {
+    if (st.kind === 'kick') continue; // an overlay on the run, not a stretch of it
+    for (const p of st.points) {
+      const last = points[points.length - 1];
+      if (last && V.distance(last, p) < 1e-6) continue;
+      points.push(p);
     }
   }
-  return best;
+  return { points, stretches };
 }
 
 /**
- * Pull `p1` onto the nearest legal cone *and* the nearest plan/elevation cardinal (R-93).
- * A too-flat straight is pitched to `slopeDeg` without turning in plan.
+ * Pull `p1` onto the nearest legal cone, keeping its azimuth around the tangent and only
+ * correcting the polar angle. A cone is a continuum, so this is the minimal correction.
  */
-export function snapToLegal(p0, p1, tangent, minRadius = 0, opts = null) {
+export function snapToLegal(p0, p1, tangent, minRadius = 0) {
   const chordVec = V.sub(p1, p0);
   const chord = V.length(chordVec);
   if (chord < EPS) return { ...p1 };
 
   const dir = V.normalize(chordVec);
   const { theta, half } = nearestSweep(coneAngleDeg(tangent, dir));
-  const inward = half > 0 ? cardinalInward(tangent, dir) : V.vec(0, 0, 0);
+
+  let inward = V.sub(dir, V.scale(tangent, V.dot(tangent, dir)));
+  inward = V.length(inward) < EPS ? V.vec(0, 0, 0) : V.normalize(inward);
 
   const rad = half * DEG;
-  const snappedDir = V.add(V.scale(V.normalize(tangent), Math.cos(rad)), V.scale(inward, Math.sin(rad)));
+  const snappedDir = V.add(V.scale(tangent, Math.cos(rad)), V.scale(inward, Math.sin(rad)));
   const d = Math.max(chord, minChordFor(theta, minRadius));
   const target = V.add(p0, V.scale(snappedDir, d));
-  const out = { ...p1, x: target.x, y: target.y, z: target.z };
 
-  if (opts && Number.isFinite(opts.slopeDeg) && theta === 0) {
-    const horiz = Math.hypot(out.x - p0.x, out.y - p0.y);
-    if (horiz > EPS && isTooFlat(p0, out, opts.slopeDeg, opts.slopeTol)) {
-      const sign = Math.sign((p1.z ?? 0) - (p0.z ?? 0)) || 1;
-      out.z = p0.z + sign * horiz * Math.tan(opts.slopeDeg * DEG);
-    }
-  }
-
-  return out;
+  return { ...p1, x: target.x, y: target.y, z: target.z };
 }
 
-export function solvePath(points, initialTangent, toleranceDeg, minRadius = 0, opts = null) {
-  return walkPath(points, initialTangent, (a, b, t) =>
-    classifySegment(a, b, t, toleranceDeg, minRadius, opts));
-}
-
-/** Pose at `dist` along a solved segment, for flange stations (R-143). */
-export function poseAlong(seg, dist) {
-  const { from, to, arc } = seg;
-  if (!arc || arc.straight) {
-    const span = V.sub(to, from);
-    const L = V.length(span) || 1;
-    const t = Math.min(1, Math.max(0, dist / L));
-    const p = V.add(from, V.scale(span, t));
-    const tangent = arc?.tStart ?? V.normalize(span);
-    return { x: p.x, y: p.y, z: p.z, tangent };
-  }
-  const ang = dist / arc.radius;
-  const start = V.scale(arc.inward, -arc.radius);
-  const p = V.add(arc.center, V.rotateAbout(start, arc.normal, ang));
-  const tangent = V.rotateAbout(arc.tStart, arc.normal, ang);
-  return { x: p.x, y: p.y, z: p.z, tangent };
-}
-
-/**
- * Shop centerline: flatten planar legs from a compound table span, then compact elbows
- * so leftover length is straight (R-149).
- */
-function expandPart(seg, options) {
-  if (!options) return [seg];
-  const { offsetMm, maxPieceMm, minRadius = 0 } = options;
-  const spans = fabricationSpans(seg, offsetMm, maxPieceMm, minRadius);
-  const params = compactBendParams(seg, offsetMm, maxPieceMm, minRadius);
-  const t0 = seg.arc?.tStart ?? V.normalize(V.sub(seg.to, seg.from));
-  const t1 = seg.arc?.tEnd ?? t0;
-  const S = V.add(seg.from, V.scale(t0, params.lead));
-  const E = V.add(seg.to, V.scale(t1, -params.trail));
-  const out = [];
-  for (const span of spans) {
-    if (span.role === 'full') {
-      out.push(seg);
-      continue;
-    }
-    if (span.role === 'lead') {
-      out.push({
-        ...seg,
-        from: seg.from,
-        to: S,
-        chord: span.length,
-        arc: { straight: true, theta: 0, tStart: t0, tEnd: t0, radius: Infinity },
-      });
-      continue;
-    }
-    if (span.role === 'trail') {
-      out.push({
-        ...seg,
-        from: E,
-        to: seg.to,
-        chord: span.length,
-        arc: { straight: true, theta: 0, tStart: t1, tEnd: t1, radius: Infinity },
-      });
-      continue;
-    }
-    const arc = arcFrom(S, E, span.theta, t0);
-    out.push({ ...seg, from: S, to: E, chord: span.length, arc });
-  }
-  return out;
-}
-
-export function expandRun(run, options) {
-  if (!run?.length) return run ?? [];
-  const out = [];
-  for (const seg of run) {
-    const parts = seg.legs?.length ? seg.legs : [seg];
-    for (const part of parts) out.push(...expandPart(part, options));
-  }
-  return out;
+export function solvePath(points, initialTangent, opts = {}) {
+  return walkPath(points, initialTangent, (a, b, t) => classifySegment(a, b, t, opts));
 }

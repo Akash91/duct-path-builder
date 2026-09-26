@@ -1,92 +1,40 @@
-// Viewport and marker invariants that both builders share. Kept dimension-free so Node tests
-// can lock the behaviours without a DOM or WebGL (docs/requirements.md R-137, R-152, R-154).
+// View helpers. Dimension-free arithmetic on {x, y, z} so both stages agree on framing.
 
-/** Drawn point must stay a pin, not a second duct. Diameter is well under the duct Ø. */
-export const POINT_DOT_R = 6;
-export const POINT_HIT_R = 18;
-export const POINT_MARKER_R = 8;
-export const POINT_SPHERE_R = 6;
+/** Never fly closer to a point than this, in millimetres. */
+export const FOCUS_STANDOFF = 9000;
 
-/** 3D origin triad length (mm). */
-export const ORIGIN_AXIS_MM = 400;
-
-/** Selecting a table row pans the 3D camera but never closer than this (mm). */
-export const MIN_FOCUS_STANDOFF = 9000;
-
-export const ORIGIN = { x: 0, y: 0, z: 0 };
-
-export function originSpec() {
-  return {
-    position: { ...ORIGIN },
-    axes: ['x', 'y', 'z'],
-    label: '0,0,0',
-    axisMm: ORIGIN_AXIS_MM,
-  };
-}
-
-/** Point glyphs stay small against the plant diameters. */
-export function markersSmallerThanDuct(ductWidth = 180, jacketWidth = 400) {
-  const outer = Math.max(ductWidth, jacketWidth);
-  const drawn = Math.max(POINT_DOT_R, POINT_SPHERE_R, POINT_MARKER_R) * 2;
-  return drawn < outer * 0.2 && drawn < ductWidth * 0.4;
-}
-
-/** Fit always frames the world origin as well as the authored points (R-137). */
-export function fitPoints(points, { includeOrigin = true } = {}) {
-  const pts = includeOrigin ? [ORIGIN, ...(points ?? [])] : [...(points ?? [])];
-  if (pts.length === 0) pts.push(ORIGIN);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const p of pts) {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    minZ = Math.min(minZ, p.z ?? 0);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-    maxZ = Math.max(maxZ, p.z ?? 0);
-  }
-  return {
-    min: { x: minX, y: minY, z: minZ },
-    max: { x: maxX, y: maxY, z: maxZ },
-    includesOrigin: minX <= 0 && maxX >= 0 && minY <= 0 && maxY >= 0 && minZ <= 0 && maxZ >= 0,
-  };
-}
-
-/** 2D: pan so `point` is centred; zoom (`w`/`h`) is unchanged (R-154). */
-export function centerViewOnPoint(view, point) {
-  if (!view || !point) return view;
-  return {
-    ...view,
-    x: point.x - view.w / 2,
-    y: point.y - view.h / 2,
-  };
-}
+const z = (p) => p.z ?? 0;
 
 /**
- * 3D: keep the current approach direction, retarget onto `point`, and pull back if closer
- * than `minStandoff` (R-154).
+ * Move the eye onto `target` while keeping the approach it already had.
+ * Selecting a row should pan, not zoom, so the distance is only ever pushed outwards.
  */
-export function focusCameraOnPoint(camera, target, point, minStandoff = MIN_FOCUS_STANDOFF) {
-  if (!camera || !target || !point) return { camera, target };
-  let ox = camera.x - target.x;
-  let oy = camera.y - target.y;
-  let oz = camera.z - target.z;
-  let len = Math.hypot(ox, oy, oz);
-  if (!(len > 0)) {
-    ox = 0.5;
-    oy = -0.7;
-    oz = 0.5;
-    len = Math.hypot(ox, oy, oz);
-  }
-  const dist = Math.max(len, minStandoff);
-  const s = dist / len;
+export function focusEye(eye, oldTarget, target, standoff = FOCUS_STANDOFF) {
+  let dx = eye.x - oldTarget.x;
+  let dy = eye.y - oldTarget.y;
+  let dz = z(eye) - z(oldTarget);
+
+  let len = Math.hypot(dx, dy, dz);
+  if (len < 1e-9) { dx = 0.5; dy = -0.7; dz = 0.5; len = Math.hypot(dx, dy, dz); }
+
+  const dist = Math.max(len, standoff);
   return {
-    target: { x: point.x, y: point.y, z: point.z ?? 0 },
-    camera: {
-      x: point.x + ox * s,
-      y: point.y + oy * s,
-      z: (point.z ?? 0) + oz * s,
-    },
-    standoff: dist,
+    x: target.x + (dx / len) * dist,
+    y: target.y + (dy / len) * dist,
+    z: z(target) + (dz / len) * dist,
   };
+}
+
+/** Bounding box of the points plus the origin, which must always stay in frame. */
+export function boundsWithOrigin(points) {
+  const all = [{ x: 0, y: 0, z: 0 }, ...points];
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+
+  for (const p of all) {
+    min.x = Math.min(min.x, p.x); max.x = Math.max(max.x, p.x);
+    min.y = Math.min(min.y, p.y); max.y = Math.max(max.y, p.y);
+    min.z = Math.min(min.z, z(p)); max.z = Math.max(max.z, z(p));
+  }
+  return { min, max };
 }

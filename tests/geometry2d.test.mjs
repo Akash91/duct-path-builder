@@ -2,12 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  DEG, arcFromChord, classifySegment, legalBearings, minChordFor,
-  nearestLegal, snapToLegal, distance, bearingDeg, solvePath,
+  DEG, arcFromChord, classifySegment as classifyWith, legalBearings, minChordFor,
+  nearestLegal, snapToLegal, distance, bearingDeg, solvePath as solveWith,
 } from '../src/2d/geometry.js';
 import { normalizeDeg, setSweeps, getSweeps, DEFAULT_SWEEPS } from '../src/core/angles.js';
 import { validRuns } from '../src/core/solve.js';
 import { arcPathD, runPathD } from '../src/2d/render.js';
+
+// These cases predate the shop options object and only care about tolerance and bend limit.
+const classifySegment = (p0, p1, tau, toleranceDeg, minRadius = 0) =>
+  classifyWith(p0, p1, tau, { toleranceDeg, minRadius });
+const solvePath = (points, heading, toleranceDeg, minRadius = 0) =>
+  solveWith(points, heading, { toleranceDeg, minRadius });
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
 const at = (p, bearing, dist) => ({

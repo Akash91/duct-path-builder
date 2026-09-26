@@ -22,8 +22,9 @@
     "ductWidth": 180,
     "jacketWidth": 400,
     "minRadiusRatio": 1.5,
-    "maxPieceLengthMm": 1050,
-    "flangeBendOffsetMm": 60,
+    "maxPieceLength": 1050,
+    "elbowFlangeOffset": 60,
+    "angledMinLead": 100,
     "slopeDeg": 3,
     "slopeToleranceDeg": 1
   }
