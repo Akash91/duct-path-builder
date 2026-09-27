@@ -5,9 +5,15 @@
 // span needs both, the primary route is an angled straight; the fallback is two compact 90°
 // cardinals; only then is it a compound bend.
 
-/** A kick is a slight aim, not a fitting. Outside this band the piece cannot be made. */
+/**
+ * A kick is a slight aim, not a fitting: it has no radius and no flanges, so on a drawing it is a
+ * mitred joint. Real duct drawings do not contain them — every direction change is a radiused
+ * elbow at a standard angle, and the only off-angle is the drain slope itself, which comes from
+ * the run's direction rather than from a fitting. So the ceiling is a few degrees of aim; beyond
+ * that the span has to become a real elbow or fail loudly.
+ */
 export const KICK_MIN_DEG = 0.5;
-export const KICK_MAX_DEG = 60;
+export const KICK_MAX_DEG = 5;
 
 /**
  * Can an angled straight be built? `alongTrack` is the chord's projection on the incoming

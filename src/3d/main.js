@@ -72,9 +72,11 @@ function syncControls(state) {
   $('ratioNote').classList.toggle('ctl-note--warn', state.minRadiusRatio < 1);
 
   const swallowed = state.jacketWidth <= state.ductWidth;
-  $('jacketNote').textContent = swallowed
-    ? 'Jacket is not wider than the duct, so it is hidden inside it.'
-    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} mm of cover around the duct.`;
+  $('jacketNote').textContent = state.jacketWidth === 0
+    ? 'No jacket. The bend limit now follows the duct alone.'
+    : swallowed
+      ? 'Jacket is not wider than the duct, so it is hidden inside it.'
+      : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} mm of cover around the duct.`;
   $('jacketNote').classList.toggle('ctl-note--warn', swallowed);
 }
 

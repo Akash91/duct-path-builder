@@ -165,6 +165,8 @@ function addCaps(group, curve, radius, material) {
 }
 
 function addBand(group, runs, diameter, color, opacity) {
+  if (!(diameter > 0)) return;
+
   const material = new THREE.MeshStandardMaterial({
     color, transparent: true, opacity, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide,
   });
@@ -216,9 +218,10 @@ function addCenterline(group, state, solution, runs) {
 function addFlanges(group, state, runs, pieces) {
   if (!state.features.flanges || !state.showFlanges) return;
 
-  const outer = Math.max(state.features.duct ? state.ductWidth : 0, state.features.jacket ? state.jacketWidth : 0);
+  // The flange bolts to the duct and sits under the insulation, so the jacket does not size it.
+  const outer = state.features.duct ? state.ductWidth : state.jacketWidth;
   const inner = outer / 2;
-  const plate = inner * 1.15;
+  const plate = inner * 1.2;
   const collar = 22;
 
   const metal = new THREE.MeshStandardMaterial({ color: COLOR.flange, roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });

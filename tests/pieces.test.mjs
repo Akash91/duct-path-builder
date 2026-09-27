@@ -15,7 +15,7 @@ const OPTS = { flangeOffset: 60, maxPieceLength: 1050, minLead: 100 };
 const seg = (index, shop) => ({ index, shop, ok: true });
 
 test('an elbow shrinks to the bend limit while the leftover still carries a stub', () => {
-  // The demo 30 degree span: a 967 mm table arc filleted down to the 600 mm floor.
+  // A 30 degree table arc that still has room to fillet down to the 600 mm floor.
   const laid = elbowLayout({ tableRadius: 967.3, theta: 30, minRadius: 600, ...OPTS });
 
   close(laid.radius, 600);
@@ -30,6 +30,20 @@ test('when the leftover cannot hold a stub, the table radius is kept', () => {
   const laid = elbowLayout({ tableRadius: 640, theta: 30, minRadius: 600, ...OPTS });
   close(laid.radius, 640);
   close(laid.leftover, 0);
+});
+
+test('with compact off the elbow keeps the radius its points imply', () => {
+  const compact = elbowLayout({ tableRadius: 665, theta: 90, minRadius: 360, ...OPTS, maxPieceLength: 1300 });
+  close(compact.radius, 360);
+  assert.ok(compact.leftover > 60, 'compact leaves straight on each side');
+
+  const full = elbowLayout({ tableRadius: 665, theta: 90, minRadius: 360, ...OPTS, maxPieceLength: 1300, compact: false });
+  close(full.radius, 665);
+  close(full.leftover, 0);
+
+  // No leftover means no lead or trail: the arc is the whole span.
+  assert.deepEqual(stretchesFor({ kind: 'elbow', ...full }).map((s) => s.kind), ['straight', 'elbow', 'straight']);
+  assert.equal(stretchesFor({ kind: 'elbow', ...full }).filter((s) => s.length > 0).length, 1);
 });
 
 test('the leftover of a fillet is equal on both sides', () => {

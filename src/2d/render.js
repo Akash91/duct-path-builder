@@ -93,8 +93,9 @@ function renderCenterline(solution, runs) {
 function renderFlanges(state, runs, pieces) {
   if (!state.features.flanges || !state.showFlanges) return '';
 
-  const outer = Math.max(state.features.duct ? state.ductWidth : 0, state.features.jacket ? state.jacketWidth : 0);
-  const half = (outer * 1.15) / 2;
+  // The flange bolts to the duct and sits under the insulation, so the jacket does not size it.
+  const outer = state.features.duct ? state.ductWidth : state.jacketWidth;
+  const half = (outer * 1.2) / 2;
   const collar = 22;
   const out = [];
 

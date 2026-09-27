@@ -66,14 +66,17 @@ test('a cone is legal where it yaws in plan or pitches in elevation', () => {
   }
 });
 
-test('a rolling elbow is not a shop fitting, whatever its cone angle says', () => {
+test('a standard sweep may be rolled to turn in plan and elevation at once', () => {
   for (const { theta, half } of legalCones().filter((c) => c.theta > 0)) {
     for (const azimuth of [37, 145, 275]) {
       const seg = classifySegment(origin, at(origin, onCone(X, half, azimuth), 3000), X, 1e-6);
-      close(seg.error, 0, 1e-9); // the cone angle itself is exact
-      assert.notEqual(seg.route, 'plan');
-      assert.notEqual(seg.route, 'elev');
-      assert.equal(seg.arc, null, `theta ${theta} at azimuth ${azimuth} must not be one elbow`);
+
+      assert.ok(seg.ok, `theta ${theta} rolled to azimuth ${azimuth} should be legal`);
+      close(seg.error, 0, 1e-9);
+      assert.equal(seg.route, 'rolled');
+      assert.equal(seg.arc.theta, theta, 'the sweep is still a standard angle');
+      // The fitting stays planar: its arc lies in one plane, that plane is just rolled.
+      close(coneAngleDeg(seg.arc.tStart, seg.arc.tEnd), theta, 1e-7);
     }
   }
 });

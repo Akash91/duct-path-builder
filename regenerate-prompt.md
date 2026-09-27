@@ -46,7 +46,12 @@ Three sections: `sweeps`, `features`, `defaults`. Merge section-wise over built-
 
 Sweeps: 0, 30, 45, 60, 90. Deduplicate, sort, drop any value outside `[0, 180)`. An empty resulting set is an error.
 
-Feature flags (all **on** in the shipped file): duct, jacket, minBendRadius, guideRays, snapping, importExport, crossLink, threeD, flanges, drainSlope, autosave.
+Feature flags: duct, jacket, minBendRadius, guideRays, snapping, importExport, crossLink, threeD,
+flanges, drainSlope, autosave all **on**; **compactElbows off**.
+
+`compactElbows` decides whether a shop elbow is pulled in to the bend limit or keeps the radius
+its table points imply. Off is the right default when the radius comes from a drawing. See
+“How to draw an elbow” below.
 
 A disabled feature is **absent**: hide its UI and exclude it from behaviour. Tag HTML with `data-feature="name"`. A comma-separated list means every named flag must be on. Flag gating is a product switch, not security. The 3D page is still served. If `threeD` is off, `index3d.html` shows a short notice and a link back to 2D and must not create a WebGL context. The 2D cross-link button is hidden when 3D is off.
 
@@ -54,7 +59,9 @@ Seed defaults:
 
 - initial heading 0°, initial elevation 0°
 - angular tolerance 2°
-- duct width 180 mm, jacket diameter 400 mm
+- duct width 180 mm, jacket diameter 400 mm (built-in fallback; a real job overrides these — the
+  worked example runs duct 406, jacket 509, taken off a drawing)
+- jacket may be **0**, meaning no jacket; the bend limit then follows the duct alone
 - min radius ratio 1.5 (range 0.5–4)
 - max piece length 1050 mm
 - elbow flange offset 60 mm
@@ -85,7 +92,9 @@ Layout: 340 px left panel, remaining width is the stage. Panel is a column: head
 - Each point is `{ id, x, y, z }`. 2D leaves `z` at 0 and does not edit it. 3D exposes `z`.
 - User can edit coordinates (2D: type or drag on canvas; 3D: type in the table only), delete, and reorder (move up / move down). Reorder re-solves the whole path.
 - Settings sliders: initial heading (−180…180), angular tolerance (0…15, step 0.5) with an inline note that slack is a kink at the joint and nothing is moved, duct width, jacket diameter, min bend ratio, max piece length, elbow flange offset. 3D also has initial elevation (−89…89) and drain pitch (1…10).
-- Toggles: Duct, Jacket, Guide rays (labelled “Cones” in 3D), Snap.
+- Toggles: Duct, Jacket, Flanges, Guide rays (labelled “Cones” in 3D), Snap. **Duct, jacket and
+  flanges start hidden** — the centerline is what the user is authoring, and a 500 mm jacket
+  buries it. Hidden is not disabled: an unticked jacket still sets `r_min`.
 - Footer: Add point, Fit, Clear, Export, Import. 3D also has Reset view. Cross-link: 2D has “Open this path in 3D →” (needs crossLink and threeD). 3D has “← Open this path in 2D”.
 - Point table: #, x (mm), y (mm), Arc in, actions. 3D adds z (mm). Selecting a row pans onto that point.
 - Duct pieces accordion: a dropdown of derived flange-to-flange pieces (kind, length, optional per-piece diameter later). It does not add table points. The user may split a leftover straight further.
@@ -170,9 +179,17 @@ Arc centre (non-straight): from the start point, radius along the inward perpend
 
 **3D:** each half-angle is a cone around the incoming unit tangent: the angle between the tangent and the chord must match `θ/2` within tolerance. The arc plane is spanned by the incoming tangent and the chord. If they are parallel and a turn is still required, pick any perpendicular.
 
-**A shop elbow is planar.** It yaws in **plan** (world-horizontal left/right) **or** pitches in **elevation** (up/down in the tangent’s vertical plane). It does **not** roll in Y and Z at once.
+**A shop elbow is planar** — its arc lies in one plane — but that plane may be **rolled** about the
+incoming tangent to any angle. That is an ordinary rolling offset, and it means an elbow may turn
+in plan and elevation at once. Only the **sweep** is constrained, to the configured set. Report
+the plane as `plan` (roll 0°), `elev` (roll ±90°) or `rolled`, and carry the roll angle for the
+shop.
 
-Table points **may** differ in Y and Z. That span is **not** one rolling elbow. Primary route: an **angled straight**. Fallback: two compact 90° cardinals. `compound-bend` only if neither route can be built. Auto-fix / snap lands on the nearer plane.
+Table points **may** differ in Y and Z. If the span sits on a legal cone it is a rolled elbow.
+Only a span that is **off every cone** needs routing: an **angled straight** first, then two
+compact 90° cardinals, and `compound-bend` if neither can be built. `compound-bend` is reserved
+for spans that move both sideways and vertically; a span that only had to change elevation and
+missed the fan is plain `no-legal-arc`.
 
 **Entry tangent is reconstructed from the chord** so the arc lands on the endpoint. Angular slack stays as a **kink at the joint**. Copying the incoming tangent leaves a visible gap. Points are never silently moved.
 
@@ -231,7 +248,7 @@ Table points are **centerline waypoints**, not extra shop parts. Pieces are **de
 
 1. **Straight** — no turn. Must drain or be a riser/slant. If longer than 1050 mm, auto-splice into even pieces (`ceil(length / max)`). The duct is still drawn.
 2. **Elbow** — always a circular arc of 30 / 45 / 60 / 90. Piece: flange, 60 mm stub, the arc, 60 mm stub, flange. Never put a flange on an arc.
-3. **Angled straight** — used to incline off the current run without a shop elbow. Stay straight at least 100 mm along the incoming tangent, take a **slight** planar kick toward the next table point, then a straight to that point. The kick is **not** a 30/45/60/90 elbow and does **not** get 60 mm elbow flanges. Kick heading change must be between 0.5° and 60°. Kick plane = plane of incoming tangent and chord; for a Y+Z span that plane sits *between* plan and elevation, so the outbound cylinder and its end flange may be **oblique** (not locked to XY, YZ, or XZ). A span already along the incoming tangent stays a plain straight. If along-track is under 100 mm, the target is behind the tangent, or the kick would not be slight, this piece cannot form — then the cardinal-90 fallback.
+3. **Angled straight** — used to incline off the current run without a shop elbow. Stay straight at least 100 mm along the incoming tangent, take a **slight** planar kick toward the next table point, then a straight to that point. The kick is **not** a 30/45/60/90 elbow and does **not** get 60 mm elbow flanges. Kick heading change must be between **0.5° and 5°**. The ceiling is deliberately small: a kick has no radius and no flanges, so on a drawing it is a mitred joint, and real duct drawings contain none — every direction change is a radiused elbow at a standard angle. Its one honest use is starting a drain slope off a level run. Kick plane = plane of incoming tangent and chord; for a Y+Z span that plane sits *between* plan and elevation, so the outbound cylinder and its end flange may be **oblique**. A span already along the incoming tangent stays a plain straight. If along-track is under 100 mm, the target is behind the tangent, or the kick would not be slight, this piece cannot form — then the cardinal-90 fallback.
 
 Prefer **longer straights** over longer curved ducts. Compact elbows. Early short bend, then diagonal toward the target. Do not Manhattan (long straight then a late 90°).
 
@@ -245,7 +262,15 @@ Every shop elbow is three sub-segments:
 2. **Circular arc** — the **shortest legal** fitting of that sweep
 3. **Trail** — straight along the exit, already on the next span’s plane when that span continues the exit tangent
 
-Shrink the drawn radius to `r_min` whenever leftover `(R − r) · tan(θ/2)` is still at least 60 mm on each side. The leftover of a circular fillet between two rays is equal on both sides. The orange arc must end as soon as the outgoing plane can run straight through the next table point. Do not keep a long gentle arc that is still turning when the next plane could already take over.
+When `compactElbows` is **on**, shrink the drawn radius to `r_min` whenever leftover
+`(R − r) · tan(θ/2)` is still at least 60 mm on each side. The leftover of a circular fillet
+between two rays is equal on both sides. The orange arc must end as soon as the outgoing plane can
+run straight through the next table point.
+
+When it is **off** (the default), the elbow keeps the radius the table points imply: leftover is
+zero and the arc fills the span edge to edge. This is what you want when the points came off a
+drawing that already specifies the radius. Note the consequence: `r_min` then only ever *flags* a
+too-tight bend, it no longer shapes one.
 
 Only if `2 × offset + R × θ` (θ in radians) would exceed max piece length may the radius shrink further to whatever still fits one piece. If even that overflows, it is `elbow-too-long`.
 
@@ -265,7 +290,8 @@ Layout of leftover after the elbow is reserved as: flange, 60 mm, arc, 60 mm, fl
 - Parameterize by **arc length** along the shop centerline: straight chords and circular arcs. Do **not** fit a Catmull-Rom or any spline through sample points. A spline through a sparse straight bulges around a table point that sits on a tangent.
 - Overlay elbow stretches in **amber** and kick stretches in **teal** on that merged run so the circular middle reads.
 - Point markers are **pins**, not a second duct. Drawn diameter stays under 20% of `max(duct, jacket)`. Use a small dot (about 6 px) and a larger hit target (about 18 px).
-- A flange is a **collar plus plate** (L-profile), not a torus. 2D: plate edge-on plus a short collar. 3D: open-cylinder collar, ring plate, four bolt holes (visual only). Layout treats the station as a zero-thickness face. 2D and 3D share the same stations and dimensions; they only look different because of the projection.
+- A flange is a **collar plus plate** (L-profile), not a torus. 2D: plate edge-on plus a short collar. 3D: open-cylinder collar, ring plate, four bolt holes (visual only). The plate is sized from the **duct**, not the jacket — a flange bolts to the duct and sits under the insulation. Layout treats the station as a zero-thickness face. 2D and 3D share the same stations and dimensions; they only look different because of the projection.
+- The 3D centerline is one **thin tube of constant diameter** whose colour changes with the shop kind, not a line. WebGL ignores line width, so a one-pixel thread beside a 400 mm duct reads as nothing — and a stretch drawn fatter than the rest stops looking like a marker on the run and starts looking like a second pipe.
 
 ---
 
@@ -275,8 +301,12 @@ Given points `p0 → p1` and incoming tangent `τ`:
 
 1. Zero chord → `degenerate`.
 2. Angle between `τ` and the chord must match a permitted half-angle within tolerance. Outside the fan → `no-legal-arc`.
-3. If the span is a 30/45/60/90 shop elbow, it must be plan **or** elev. A 0° straight is exempt even if the chord has all three world components.
-4. If the table span moves in Y and Z: try an angled straight aimed at the point. If that cannot be built, try two compact 90° cardinals. Only then `compound-bend`.
+3. If the span is a 30/45/60/90 shop elbow it is legal in any rolled plane; record whether that
+   plane is plan, elev or rolled. A 0° straight is exempt even if the chord has all three world
+   components.
+4. If the span is **off every cone** and must also change elevation relative to the tangent: try an
+   angled straight aimed at the point. If that cannot be built, try two compact 90° cardinals.
+   Only then `compound-bend` — and only if the span also moves sideways, otherwise `no-legal-arc`.
 5. Elevation-only chords that miss a discrete elbow but meet the drain floor are sloped straights.
 6. Straights flatter than the drain floor → `off-slope`.
 7. Legal angle with `r < r_min` → `too-tight` (still drawable).
@@ -294,10 +324,12 @@ Write unit tests as you go. At minimum cover:
 - legal bearings / cones; fan width; reconstructed entry tangent
 - errors do not cascade
 - `r_min` and `d_min`; too-tight does not break a run
-- 3D shop elbow is plan or elev; Y+Z aims as angled straight; cardinal 90s are fallback only
-- drain floor; rise or fall both valid; sloped-straight vs forced elbow
-- angled-straight lead ≥ 100 mm, kick 0.5°–60°, drain judged after the kick
-- elbow is lead + short arc + trail; shrink to `r_min` when 60 mm leftovers fit; trail already on the next plane
+- 3D shop elbow may be rolled to any plane; only the sweep is constrained. Y+Z **on a cone** is a
+  rolled elbow; Y+Z **off every cone** aims as an angled straight; cardinal 90s are fallback only
+- `compound-bend` only for spans that move sideways and vertically; elevation-only misses are
+  `no-legal-arc`
+- angled-straight lead ≥ 100 mm, kick 0.5°–5°, drain judged after the kick
+- elbow is lead + short arc + trail when `compactElbows` is on; one arc edge to edge when it is off
 - leftover straights splice at 1050; `elbow-too-long` is not split along the bend
 - shop visual kinds: straight / elbow / kick
 - millimetre labels; origin triad always present; row-select standoff ≥ 9000 mm; piece dropdown exists; hover reports length and degrees

@@ -22,13 +22,17 @@ const EPS = 1e-6;
  * The table arc of radius R and the tightest legal fillet of radius r share both tangent rays,
  * so a fillet touches down (R − r)·tan(θ/2) short of where the table arc did — equally on both
  * sides. Shrinking to r_min is only worth it while that leftover still carries a flange stub.
+ *
+ * `compact` is what makes that shrink happen at all. With it off the elbow keeps the radius the
+ * table points imply, filling the span edge to edge — which is what you want when the radius
+ * came off a drawing rather than from the shop's stock of fittings.
  */
-export function elbowLayout({ tableRadius, theta, minRadius = 0, flangeOffset, maxPieceLength }) {
+export function elbowLayout({ tableRadius, theta, minRadius = 0, flangeOffset, maxPieceLength, compact = true }) {
   const half = Math.tan((theta * DEG) / 2);
   const rad = theta * DEG;
 
   let radius = tableRadius;
-  if (minRadius > 0 && minRadius < tableRadius && (tableRadius - minRadius) * half >= flangeOffset - EPS) {
+  if (compact && minRadius > 0 && minRadius < tableRadius && (tableRadius - minRadius) * half >= flangeOffset - EPS) {
     radius = minRadius;
   }
 

@@ -16,6 +16,8 @@ export const DEFAULT_CONFIG = {
     threeD: true,
     flanges: true,
     drainSlope: true,
+    // Off: an elbow keeps the radius its points imply instead of shrinking to the bend limit.
+    compactElbows: false,
     autosave: true,
   },
   // All lengths are millimetres.

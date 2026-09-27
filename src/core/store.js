@@ -1,22 +1,35 @@
 import { makePoint, reserveIds } from './solve.js';
 import { DEFAULT_CONFIG } from './config.js';
-import { DEG } from './angles.js';
 
 // Namespaced per app, so the 2D and 3D builders never overwrite each other's autosave.
-// v2 is the millimetre era; any older centimetre save is left where it is rather than rescaled.
-let storageKey = 'curve-path-builder/2d/v2';
+// v3 is the drawing-demo path. Older millimetre (v2) and centimetre saves are left unused.
+let storageKey = 'curve-path-builder/2d/v3';
 let app = '2d';
 
 let seed = { ...DEFAULT_CONFIG.defaults };
 let features = { ...DEFAULT_CONFIG.features };
 
-/** The shipped demo path, in millimetres. */
-const DEMO = [[0, 0], [1600, 0], [2083.0, 129.4], [3295.4, 829.4]];
+/**
+ * Shipped demo, millimetres, taken from a real run. z is authored — do not re-ramp it.
+ * 2D keeps z at 0 (R-13); the two vertical risers then collapse in plan.
+ */
+export const DEMO_POINTS = [
+  [0, 0, 0],
+  [2180.33, 0, 114.27],
+  [2820.00, 0, 788.34],
+  [2820.00, 0, 3612.53],
+  [2820.00, 90.44, 3950.04],
+  [2820.00, 1361.56, 6151.66],
+  [2820.00, 1452.00, 6489.17],
+  [2820.00, 1452.00, 9027.06],
+  [2670.92, 1452.00, 9386.98],
+  [2511.84, 1452.00, 9546.06],
+  [2260.79, 1452.00, 9691.00],
+  [1464.82, 1452.00, 9904.28],
+];
 
-/** In 3D the opening run has to drain, so the demo sits on the configured ramp. */
 function demoPoints() {
-  const ramp = app === '3d' && features.drainSlope ? Math.tan(seed.slopeDeg * DEG) : 0;
-  return DEMO.map(([x, y]) => makePoint(x, y, Math.round(x * ramp * 10) / 10));
+  return DEMO_POINTS.map(([x, y, z]) => makePoint(x, y, app === '2d' ? 0 : z));
 }
 
 const defaults = () => ({
@@ -42,7 +55,7 @@ const listeners = new Set();
 /** Apply a loaded config. Must run before restore() and the first render. */
 export function configure(config, namespace = '2d') {
   app = namespace;
-  storageKey = `curve-path-builder/${namespace}/v2`;
+  storageKey = `curve-path-builder/${namespace}/v3`;
   seed = { ...DEFAULT_CONFIG.defaults, ...config.defaults };
   features = { ...DEFAULT_CONFIG.features, ...config.features };
   state = defaults();

@@ -344,9 +344,9 @@ Current flags: `duct`, `jacket`, `minBendRadius`, `guideRays`, `snapping`, `impo
 
 - **R-110** Every length in the model, the UI, the export and the config is a **millimetre**.
   Every label that shows a length or a diameter says `mm`.
-- **R-111** Saved data is never silently rescaled. The millimetre era uses the storage keys
-  `curve-path-builder/2d/v2` and `curve-path-builder/3d/v2`; any older centimetre save is left
-  where it is, unread.
+- **R-111** Saved data is never silently rescaled. The current keys are
+  `curve-path-builder/2d/v3` and `curve-path-builder/3d/v3`. Older millimetre (`/v2`) and
+  centimetre saves are left where they are, unread.
 - **R-112** Shipped seed values: duct 180, jacket 400, min radius ratio 1.5, max piece length
   1050, elbow flange offset 60, angled-straight minimum lead 100, drain pitch 3°, drain
   tolerance 1°.
@@ -365,10 +365,14 @@ and the ends of a path count as flanges.
   flange.
 - **R-122** An elbow piece is flange, `offset` stub, the arc, `offset` stub, flange. A flange is
   never placed on an arc.
-- **R-123** The drawn elbow radius shrinks to `r_min` whenever the leftover `(R − r)·tan(θ/2)`
-  still carries a stub on each side. The leftover of a fillet between two rays is equal on both
-  sides, so the lead and the trail are the same length. The arc must end as soon as the outgoing
-  plane can run straight to the next point.
+- **R-123** With `compactElbows` **on**, the drawn elbow radius shrinks to `r_min` whenever the
+  leftover `(R − r)·tan(θ/2)` still carries a stub on each side. The leftover of a fillet between
+  two rays is equal on both sides, so the lead and the trail are the same length. The arc must end
+  as soon as the outgoing plane can run straight to the next point.
+- **R-123a** With `compactElbows` **off** (the shipped default) the elbow keeps the radius its
+  table points imply: leftover is zero and the arc fills the span edge to edge. This is what a
+  radius taken off a drawing needs. The consequence is that `r_min` then only *flags* a too-tight
+  bend rather than shaping one.
 - **R-124** Only if `2·offset + R·θ` would exceed `maxPieceLength` may the radius shrink further,
   and never below `r_min`. If even that overflows, the span is **`elbow-too-long`** — the bend is
   *not* split.
@@ -377,22 +381,30 @@ and the ends of a path count as flanges.
 - **R-126** Less than a stub of straight on either side of an elbow, or between two elbows, is
   **`short-stub`**.
 - **R-127** An angled straight is at least `minLead` along the incoming tangent, a **kick** of
-  between 0.5° and 60°, then a straight to the point. The kick takes no elbow flanges. Its plane
+  between 0.5° and 5°, then a straight to the point. The kick takes no elbow flanges. Its plane
   is the plane of the incoming tangent and the chord, so its outbound end face may be oblique.
+  The ceiling is deliberately small: a kick has no radius and no flanges, so on a drawing it is a
+  mitred joint, and real duct drawings contain none. Anything beyond a few degrees of aim must be
+  a radiused elbow at a standard angle, or fail.
 - **R-128** The user may cut a derived straight further. That is a shop choice: it adds no table
   point and changes no geometry.
 - **R-129** A flange is a **collar plus a plate**, not a torus. 2D draws the plate edge-on with a
   short collar; 3D draws an open-cylinder collar, a ring plate and four decorative bolt holes.
-  Both use the same stations and the same diameters.
+  Both use the same stations and the same diameters. The plate is sized from the **duct**, not the
+  jacket: a flange bolts to the duct and sits under the insulation.
+- **R-129a** The jacket diameter may be **0**, meaning no jacket. `r_min` then follows the duct
+  alone and no jacket tube is drawn.
 
 ---
 
 ## 8c. Planarity and routing (3D)
 
-- **R-130** A shop elbow is **planar**: it yaws in plan or pitches in elevation, never both. Plan
-  and elevation are measured in the **tangent's own frame**, so a duct already on a drain ramp can
-  still take a pure plan elbow.
-- **R-131** A span that must move both laterally and vertically is not one rolling elbow. Primary
+- **R-130** A shop elbow is **planar**: its arc lies in one plane. That plane may be **rolled**
+  about the incoming tangent to any angle — an ordinary rolling offset — so an elbow may turn in
+  plan and elevation at once. Only the **sweep** is constrained, to the configured set. `route`
+  reports `plan` (roll 0°), `elev` (roll ±90°) or `rolled`, and `roll` carries the plane's angle
+  from horizontal for the shop.
+- **R-131** A span **off every cone** that must also change elevation is not a fitting. Primary
   route: an **angled straight**. Fallback: **two compact 90° cardinals** — run on, turn onto the
   lateral cardinal, turn onto the vertical. Only if neither can be built is it **`compound-bend`**.
 - **R-132** A purely lateral miss has no shop trick, and stays **`no-legal-arc`**. This is why 2D,
@@ -423,7 +435,12 @@ and the ends of a path count as flanges.
   arcs, walked by arc length. No Catmull-Rom and no spline is fitted through the samples: a spline
   through a sparse straight bulges around a table point that sits on a tangent.
 - **R-151** Elbow stretches are overlaid in **amber**, kick stretches in **teal**, on the merged
-  run, so the circular middle reads.
+  run, so the circular middle reads. In 3D the whole centerline is one **thin tube of constant
+  diameter** whose colour changes with the kind — WebGL ignores line width, and a stretch drawn
+  fatter than the rest reads as a second pipe rather than a marker on the run.
+- **R-151a** Duct, jacket and flanges are toggleable layers and all three **start hidden**: the
+  centerline is what the user is authoring. Hidden is not disabled — an unticked jacket still
+  sets `r_min`.
 - **R-152** Point markers are **pins**, not a second duct: the drawn diameter stays under 20% of
   `max(duct, jacket)`.
 - **R-153** The 3D scene always draws an **origin triad** at `(0,0,0)` — X red, Y green, Z blue —
@@ -486,3 +503,10 @@ and the ends of a path count as flanges.
 | 2026-09-24 | **Planarity and routing** (§8c, R-130…R-133). A legal cone angle is no longer sufficient in 3D: an elbow must yaw in plan or pitch in elevation, measured in the tangent's own frame. Y+Z spans route to an angled straight, then to two cardinal 90s, and only then fail as `compound-bend`. Guide marks dropped from full rings to the four cardinal generators plus the straight ray. `threeD` now ships on. |
 | 2026-09-24 | **Drainage** (§8d, R-140…R-144). Added `core/slope.js` and the `drainSlope` flag. A horizontal straight flatter than `slopeDeg − slopeToleranceDeg` is `off-slope`; a rise and a fall are equally valid. Drain on an angled straight is judged after the kick, so the 100 mm stub may stay level. Fix pitches `z` without inserting a point. |
 | 2026-09-24 | **Drawing correction** (§8e, R-150…R-156). The 3D duct was being tubed along a `CatmullRomCurve3` through sampled points, which bulges around a table point sitting on a tangent. Replaced with a curve that walks the real shop polyline by arc length. Added the amber/teal stretch overlay, the origin triad, the 9000 mm row-focus standoff, piece hover tooltips, and a collapsible settings accordion so the point table can scroll. |
+| 2026-09-26 | **Layers** (R-151a). Flanges became a toggleable layer alongside duct and jacket, and all three now start hidden — a 500 mm jacket buries the centerline the user is authoring. Hidden still counts towards `r_min`; only a disabled feature is excluded. |
+| 2026-09-27 | **Correction — a rolled elbow is a real fitting** (R-130, R-131). The rule that an elbow must yaw in plan *or* pitch in elevation was wrong: a standard elbow rolled about the incoming axis is an ordinary rolling offset, and it turns in both at once. Only the sweep is constrained. `route` gained `rolled` and segments carry the bend plane's `roll` angle. This alone fixed two spans of the worked example that had been failing as `compound-bend`. |
+| 2026-09-27 | **Correction — the kick ceiling was far too high** (R-127). It was 60°, which silently accepted 43°, 52° and 58° mitres as valid. Thirteen spools of real drawings contain **no mitred joints at all** — every direction change is a radiused elbow at a standard angle, and the only off-angle is the drain slope, which comes from the run's direction rather than a fitting. Lowered to 5°, whose one honest use is starting a slope off a level run. |
+| 2026-09-27 | **`compactElbows` made a flag, off by default** (R-123a). Shrinking every elbow to `r_min` is right when laying out a run from scratch and wrong when the radius came off a drawing — it replaced a specified 665 mm arc with a 360 mm one plus two straights. Off, the arc fills the span edge to edge. |
+| 2026-09-27 | **`compound-bend` narrowed** . It was reported for any unroutable span reaching the routing branch, including pure-elevation ones with no lateral component at all — which sent the reader hunting for an offset that was not there. Now reserved for spans that move both sideways and vertically; elevation-only misses are `no-legal-arc`. |
+| 2026-09-27 | **Real duct sizes, and the flange moved onto the duct** (R-129, R-129a). Extracted from a production DWG: duct ID 400×3, insulation ID 506×1.5, flange 485×12, `SLOPE 3°`. The flange plate had been sized from `max(duct, jacket)`; it bolts to the duct and sits under the insulation, so it is sized from the duct. Jacket may now be 0. See [source-data.md](source-data.md). |
+| 2026-09-27 | **Drawing demo path.** The default table is the twelve-point run (start, 3° slope, 90° r 657, riser, 30° r 675, incline, 30° r 675, riser, 45° r 509, straight, 30° r 560, straight to end). z is authored, not re-ramped. Storage keys bumped to `/v3` so an old four-point save is not silently kept. |

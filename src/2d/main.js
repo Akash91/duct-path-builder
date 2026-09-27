@@ -81,9 +81,11 @@ function syncControls(state) {
 
   // The jacket is drawn under the duct, so a smaller diameter silently vanishes (R-39).
   const swallowed = state.jacketWidth <= state.ductWidth;
-  $('jacketNote').textContent = swallowed
-    ? 'Jacket is not wider than the duct, so it is hidden behind it.'
-    : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} mm of cover around the duct.`;
+  $('jacketNote').textContent = state.jacketWidth === 0
+    ? 'No jacket. The bend limit now follows the duct alone.'
+    : swallowed
+      ? 'Jacket is not wider than the duct, so it is hidden behind it.'
+      : `Outer diameter. ${((state.jacketWidth - state.ductWidth) / 2).toFixed(1)} mm of cover around the duct.`;
   $('jacketNote').classList.toggle('ctl-note--warn', swallowed);
 }
 

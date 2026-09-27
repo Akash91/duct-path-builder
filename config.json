@@ -12,6 +12,7 @@
     "threeD": true,
     "flanges": true,
     "drainSlope": true,
+    "compactElbows": false,
     "autosave": true
   },
 
@@ -19,10 +20,10 @@
     "initialHeading": 0,
     "initialElevation": 0,
     "toleranceDeg": 2,
-    "ductWidth": 180,
-    "jacketWidth": 400,
-    "minRadiusRatio": 1.5,
-    "maxPieceLength": 1050,
+    "ductWidth": 406,
+    "jacketWidth": 509,
+    "minRadiusRatio": 1.0,
+    "maxPieceLength": 1250,
     "elbowFlangeOffset": 60,
     "angledMinLead": 100,
     "slopeDeg": 3,

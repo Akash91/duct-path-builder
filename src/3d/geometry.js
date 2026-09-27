@@ -150,6 +150,7 @@ export function classifySegment(p0, p1, tangent, opts = {}) {
     slopeDeg = 3,
     slopeToleranceDeg = 1,
     drain = true,
+    compact = true,
   } = opts;
 
   const chordVec = V.sub(p1, p0);
@@ -171,9 +172,11 @@ export function classifySegment(p0, p1, tangent, opts = {}) {
 
   const cone = coneAngleDeg(tangent, dir);
   const nearest = nearestSweep(cone);
+  // Roll is the bend plane's angle from horizontal: 0 is a plan turn, +/-90 an elevation one.
+  const roll = Math.atan2(vertical, lateral) / DEG;
   const base = {
     chord, cone, error: nearest.error, nearest, minRadius,
-    minChord: minChordFor(nearest.theta, minRadius), devPlan, devElev,
+    minChord: minChordFor(nearest.theta, minRadius), devPlan, devElev, roll,
   };
   const onCone = Math.abs(nearest.error) <= toleranceDeg;
 
@@ -190,33 +193,32 @@ export function classifySegment(p0, p1, tangent, opts = {}) {
   }
 
   if (onCone) {
-    // Built from the actual chord, so the swept angle stays exactly one of the permitted set.
+    // A fitting is planar, but that plane may be rolled about the incoming axis to any angle —
+    // an ordinary rolling offset. Only the sweep has to be one of the standard angles.
     const plane = Math.abs(devElev) <= toleranceDeg ? 'plan'
       : Math.abs(devPlan) <= toleranceDeg ? 'elev'
-        : null;
+        : 'rolled';
 
-    if (plane) {
-      const arc = arcFrom(p0, p1, nearest.theta, tangent);
-      const tooTight = isTooTight(arc.radius, minRadius);
-      const layout = elbowLayout({
-        tableRadius: arc.radius, theta: nearest.theta, minRadius, flangeOffset, maxPieceLength,
-      });
-      return {
-        ok: true,
-        tooTight,
-        reason: layout.reason ?? (tooTight ? 'too-tight' : null),
-        ...base,
-        arc,
-        route: plane,
-        shop: { kind: 'elbow', ...layout },
-        tOut: arc.tEnd,
-      };
-    }
+    // Built from the actual chord, so the swept angle stays exactly one of the permitted set.
+    const arc = arcFrom(p0, p1, nearest.theta, tangent);
+    const tooTight = isTooTight(arc.radius, minRadius);
+    const layout = elbowLayout({
+      tableRadius: arc.radius, theta: nearest.theta, minRadius, flangeOffset, maxPieceLength, compact,
+    });
+    return {
+      ok: true,
+      tooTight,
+      reason: layout.reason ?? (tooTight ? 'too-tight' : null),
+      ...base,
+      arc,
+      route: plane,
+      shop: { kind: 'elbow', ...layout },
+      tOut: arc.tEnd,
+    };
   }
 
-  // Either off every cone, or a legal cone angle that would need a rolling elbow. Both are only
-  // routable when the span has to change elevation relative to the tangent; a purely lateral
-  // miss has no shop trick and is simply off the fan.
+  // Off every cone. Only routable when the span has to change elevation relative to the tangent;
+  // a purely lateral miss has no shop trick and is simply off the fan.
   if (Math.abs(devElev) <= toleranceDeg) {
     return fail('no-legal-arc', base, dir);
   }
@@ -252,7 +254,10 @@ export function classifySegment(p0, p1, tangent, opts = {}) {
     };
   }
 
-  return fail('compound-bend', base, dir);
+  // A compound bend is specifically a span that moves both sideways and vertically and could not
+  // be routed. One that only ever needed to change elevation is plainly off the fan, and saying
+  // "compound" would send the user looking for a lateral offset that is not there.
+  return fail(Math.abs(devPlan) > toleranceDeg ? 'compound-bend' : 'no-legal-arc', base, dir);
 }
 
 /**

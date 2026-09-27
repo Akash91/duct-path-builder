@@ -47,8 +47,11 @@ test('the shipped defaults are millimetres, not centimetres', () => {
   assert.equal(defaults.elbowFlangeOffset, 60);
   assert.equal(defaults.angledMinLead, 100);
 
+  // config.json carries a real duct rather than the built-in fallback, so check the scale
+  // rather than the value: a centimetre-era file would be an order of magnitude smaller.
   const shipped = JSON.parse(read('config.json'));
-  assert.equal(shipped.defaults.ductWidth, 180);
+  assert.ok(shipped.defaults.ductWidth >= 100, 'duct is millimetres');
+  assert.ok(shipped.defaults.maxPieceLength >= 500, 'piece length is millimetres');
   assert.equal(shipped.features.threeD, true);
   assert.equal(shipped.features.drainSlope, true);
   assert.equal(shipped.features.flanges, true);
@@ -126,9 +129,9 @@ test('2D leaves z alone and the 3D handoff warns when it cannot', () => {
   assert.match(main2d, /non-zero z/);
 });
 
-test('autosave is namespaced per app and on the millimetre era key', () => {
+test('autosave is namespaced per app and on the drawing-demo key', () => {
   const store = read('src/core/store.js');
-  assert.match(store, /curve-path-builder\/\$\{namespace\}\/v2/);
+  assert.match(store, /curve-path-builder\/\$\{namespace\}\/v3/);
 });
 
 test('a coordinate field survives being clicked into', () => {

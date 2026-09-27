@@ -88,6 +88,7 @@ export function shopOptions(state) {
     slopeDeg: state.slopeDeg,
     slopeToleranceDeg: state.slopeToleranceDeg,
     drain: Boolean(state.features.drainSlope),
+    compact: Boolean(state.features.compactElbows),
     extraSplits: state.extraSplits ?? {},
   };
 }

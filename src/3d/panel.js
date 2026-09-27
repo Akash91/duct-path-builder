@@ -10,6 +10,7 @@ const ROUTE_LABEL = {
   straight: 'straight',
   plan: 'plan elbow',
   elev: 'elev elbow',
+  rolled: 'rolled elbow',
   angled: 'angled straight',
   cardinal: 'cardinal 90s',
 };
@@ -26,8 +27,9 @@ function statusTag(incoming) {
   if (incoming.ok) {
     const route = ROUTE_LABEL[incoming.route] ?? incoming.route;
     const detail = incoming.route === 'angled' ? `${incoming.shop.kickDeg.toFixed(1)}\u00b0 kick`
-      : incoming.arc && !incoming.arc.straight ? `${incoming.arc.theta}\u00b0`
-        : '';
+      : incoming.route === 'rolled' ? `${incoming.arc.theta}\u00b0 rolled ${Math.abs(incoming.roll).toFixed(0)}\u00b0`
+        : incoming.arc && !incoming.arc.straight ? `${incoming.arc.theta}\u00b0`
+          : '';
     return `<span class="tag tag--ok">${route}${detail ? ` ${detail}` : ''}</span>`;
   }
   if (incoming.reason === 'degenerate') return '<span class="tag tag--err">duplicate</span>';

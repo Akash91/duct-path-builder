@@ -82,7 +82,7 @@ export function arcFromChord(p0, p1, theta, dir) {
  * straight chord bearing so a single bad point does not invalidate everything after it (R-19).
  */
 export function classifySegment(p0, p1, tauDeg, opts = {}) {
-  const { toleranceDeg = 2, minRadius = 0, flangeOffset = 60, maxPieceLength = 1050 } = opts;
+  const { toleranceDeg = 2, minRadius = 0, flangeOffset = 60, maxPieceLength = 1050, compact = true } = opts;
   const chord = distance(p0, p1);
 
   if (chord < EPS) {
@@ -98,7 +98,7 @@ export function classifySegment(p0, p1, tauDeg, opts = {}) {
     const tooTight = isTooTight(arc.radius, minRadius);
     const shop = arc.straight
       ? { kind: 'straight', length: chord }
-      : { kind: 'elbow', ...elbowLayout({ tableRadius: arc.radius, theta: arc.theta, minRadius, flangeOffset, maxPieceLength }) };
+      : { kind: 'elbow', ...elbowLayout({ tableRadius: arc.radius, theta: arc.theta, minRadius, flangeOffset, maxPieceLength, compact }) };
 
     return {
       ok: true, tooTight, reason: shop.reason ?? (tooTight ? 'too-tight' : null),
